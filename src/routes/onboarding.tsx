@@ -38,7 +38,7 @@ type Platform = "MT5" | "cTrader";
 
 type DoneInfo = {
   status: "live" | "awaiting_attention" | "ctrader_connected";
-  message?: string | null;
+  message: string | null;
 };
 
 function Onboarding() {
@@ -78,7 +78,7 @@ function Onboarding() {
     if (status === "connected") {
       setRole("master");
       setPlatform("cTrader");
-      setDoneInfo({ status: "live", message });
+      setDoneInfo({ status: "live", message: message ?? null });
       setStep(3);
       toast.success(message ?? "cTrader account connected");
     } else {
@@ -127,7 +127,7 @@ function Onboarding() {
       goDashboard();
       return;
     }
-    setDoneInfo({ status: "live", message: res.message });
+    setDoneInfo({ status: "live", message: res.message ?? null });
     setStep(doneStepIndex);
   };
 
@@ -497,7 +497,7 @@ function Onboarding() {
         {step === doneStepIndex && (
           <Panel
             title={doneInfo?.status === "ctrader_connected" ? "cTrader connected" : "You're all set"}
-            sub={doneInfo?.message ?? undefined}
+            {...(doneInfo?.message ? { sub: doneInfo.message } : {})}
           >
             <div className="rounded-lg border border-border bg-surface p-6 text-center">
               <Check className="mx-auto h-8 w-8 text-primary" />

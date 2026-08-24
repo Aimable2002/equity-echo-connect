@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { useNavigate } from "@tanstack/react-router";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueries } from "@tanstack/react-query";
 import type { Session } from "@supabase/supabase-js";
 import {
   supabase,
@@ -11,7 +11,8 @@ import {
   type LiveAccountStateRow,
   type SubscriptionRow,
 } from "@/lib/supabase";
-import { endpoints, type DirectoryMaster } from "@/lib/api";
+import { endpoints, type DirectoryMaster, type Deal } from "@/lib/api";
+import { computeStats, type TradeStats } from "@/lib/trades";
 
 /* ------------------------------------------------------------ session */
 
@@ -195,4 +196,36 @@ export function useAccountSubscriptions(accountIds: string[]) {
     },
     enabled: !!key,
   });
+}
+
+/* --------------------------------------------------- master perf stats */
+
+export function useMastersStats(accountIds: string[]) {
+  const ids = useMemo(() => accountIds.slice(), [accountIds.join(",")]);
+  const queries = useQueries({
+    queries: ids.map((id) => ({
+      queryKey: ["master-trades", id],
+      queryFn: (): Promise<Deal[]> => endpoints.masterTrades(id),
+      staleTime: 60_000,
+    })),
+  });
+
+  return useMemo(() => {
+    const map = new Map<
+      string,
+      { stats: TradeStats | null; trades: Deal[]; isLoading: boolean; isError: boolean }
+    >();
+    ids.forEach((id, i) => {
+      const q = queries[i];
+      const trades = q?.data ?? [];
+      map.set(id, {
+        stats: q?.data ? computeStats(q.data) : null,
+        trades,
+        isLoading: q?.isLoading ?? false,
+        isError: q?.isError ?? false,
+      });
+    });
+    return map;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [ids, queries.map((q) => q.dataUpdatedAt).join(",")]);
 }
