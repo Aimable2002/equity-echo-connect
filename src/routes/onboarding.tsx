@@ -1,22 +1,17 @@
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
-import { useState } from "react";
+import { useEffect, useState } from "react";
+import { useQuery } from "@tanstack/react-query";
 import { ArrowLeft, ArrowRight, Check, Radio, Users } from "lucide-react";
 import { toast } from "sonner";
-import { Logo, Avatar, PnL } from "@/components/brand";
+import { Logo, Avatar } from "@/components/brand";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { Slider } from "@/components/ui/slider";
 import { Badge } from "@/components/ui/badge";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
-import { BROKERS, MASTERS, type Platform } from "@/lib/mock";
+import { endpoints, ApiError, type DirectoryMaster } from "@/lib/api";
+import type { SizingMode } from "@/lib/supabase";
 import { cn } from "@/lib/utils";
 
 export const Route = createFileRoute("/onboarding")({
@@ -39,24 +34,187 @@ export const Route = createFileRoute("/onboarding")({
 });
 
 type Role = "master" | "follower" | null;
+type Platform = "MT5" | "cTrader";
+
+type DoneInfo = {
+  status: "live" | "awaiting_attention" | "ctrader_connected";
+  message?: string | null;
+};
 
 function Onboarding() {
   const navigate = useNavigate();
   const [step, setStep] = useState(0);
   const [role, setRole] = useState<Role>(null);
   const [platform, setPlatform] = useState<Platform>("MT5");
-  const [masterId, setMasterId] = useState(MASTERS[0]!.id);
-  const [sizing, setSizing] = useState<"proportional" | "fixed-lot" | "risk-percent" | "micro-scale">(
-    "risk-percent",
-  );
+
+  const [masterId, setMasterId] = useState<string | null>(null);
+  const [sizing, setSizing] = useState<SizingMode>("risk-percent");
   const [risk, setRisk] = useState(0.75);
+  const [fixedLot, setFixedLot] = useState("0.10");
+  const [microLot, setMicroLot] = useState("0.01");
 
-  const steps = role === "master" ? ["Role", "Platform", "Account"] : ["Role", "Master", "Account", "Sizing"];
+  const [login, setLogin] = useState("");
+  const [password, setPassword] = useState("");
+  const [server, setServer] = useState("");
+  const [broker, setBroker] = useState("");
+  const [bio, setBio] = useState("");
+
+  const [submitting, setSubmitting] = useState(false);
+  const [formError, setFormError] = useState<string | null>(null);
+  const [doneInfo, setDoneInfo] = useState<DoneInfo | null>(null);
+
+  const mastersQuery = useQuery({
+    queryKey: ["onboarding-masters-directory"],
+    queryFn: (): Promise<DirectoryMaster[]> => endpoints.mastersDirectory(),
+  });
+
+  // Handle cTrader OAuth redirect back to this page.
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const params = new URLSearchParams(window.location.search);
+    const status = params.get("ctrader_status");
+    const message = params.get("message");
+    if (!status) return;
+    if (status === "connected") {
+      setRole("master");
+      setPlatform("cTrader");
+      setDoneInfo({ status: "live", message });
+      setStep(3);
+      toast.success(message ?? "cTrader account connected");
+    } else {
+      toast.error(message ?? "cTrader connection failed");
+      setFormError(message ?? "cTrader connection failed");
+    }
+  }, []);
+
+  const steps = role === "master" ? ["Role", "Platform", "Account", "Done"] : ["Role", "Master", "Account", "Sizing", "Done"];
   const last = steps.length - 1;
+  const accountStepIndex = role === "master" ? 2 : 2;
+  const doneStepIndex = last;
 
-  const finish = () => {
-    toast.success(role === "master" ? "Master account submitted for review" : "Copying started");
-    navigate({ to: "/dashboard" });
+  const visibleMasters = (mastersQuery.data ?? []).slice(0, 5);
+
+  useEffect(() => {
+    if (!masterId && visibleMasters.length) setMasterId(visibleMasters[0]!.account_id);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [visibleMasters.length]);
+
+  function validateSizingValue(): { value: number | null; error: string | null } {
+    if (sizing === "proportional") return { value: null, error: null };
+    if (sizing === "risk-percent") {
+      if (!(risk > 0)) return { value: null, error: "Risk % must be greater than 0" };
+      return { value: risk, error: null };
+    }
+    if (sizing === "fixed-lot") {
+      const n = Number(fixedLot);
+      if (!(n > 0)) return { value: null, error: "Lot size must be greater than 0" };
+      return { value: n, error: null };
+    }
+    // micro-scale
+    const n = Number(microLot);
+    if (!(n >= 0.01)) return { value: null, error: "Minimum lot size must be at least 0.01" };
+    return { value: n, error: null };
+  }
+
+  const goDashboard = () => navigate({ to: "/dashboard" });
+
+  const handleProvisionResult = (res: { status?: string; account_id?: string; message?: string }) => {
+    if (res.status === "awaiting_attention") {
+      toast.info(
+        res.message ??
+          "Your account may need a manual step (e.g. a broker popup). Provisioning is finishing in the background.",
+      );
+      goDashboard();
+      return;
+    }
+    setDoneInfo({ status: "live", message: res.message });
+    setStep(doneStepIndex);
+  };
+
+  const finish = async () => {
+    setFormError(null);
+
+    if (role === "master") {
+      if (platform === "cTrader") {
+        setSubmitting(true);
+        try {
+          const res = await endpoints.ctraderStart({ role: "master", broker: broker || null });
+          const url = res.redirect_url ?? res.url ?? res.authorization_url;
+          if (!url) throw new Error("No redirect URL returned for cTrader connection.");
+          window.location.assign(url);
+        } catch (err) {
+          const message = err instanceof ApiError ? err.message : err instanceof Error ? err.message : "Failed to start cTrader connection";
+          setFormError(message);
+          toast.error(message);
+        } finally {
+          setSubmitting(false);
+        }
+        return;
+      }
+
+      if (!login || !password || !server) {
+        setFormError("Login, password and server are required");
+        return;
+      }
+      setSubmitting(true);
+      try {
+        const res = await endpoints.provision({
+          role: "master",
+          login,
+          password,
+          server,
+          broker: broker || null,
+        });
+        handleProvisionResult(res);
+      } catch (err) {
+        const message = err instanceof ApiError ? err.message : err instanceof Error ? err.message : "Provisioning failed";
+        setFormError(message);
+        toast.error(message);
+      } finally {
+        setSubmitting(false);
+      }
+      return;
+    }
+
+    // follower
+    if (!masterId) {
+      setFormError("Pick a master to copy");
+      return;
+    }
+    if (!login || !password || !server) {
+      setFormError("Login, password and server are required");
+      return;
+    }
+    const { value: sizingValue, error: sizingError } = validateSizingValue();
+    if (sizingError) {
+      setFormError(sizingError);
+      return;
+    }
+    setSubmitting(true);
+    try {
+      const res = await endpoints.provision({
+        role: "follower",
+        login,
+        password,
+        server,
+        broker: broker || null,
+        master_account_id: masterId,
+        sizing_mode: sizing,
+        sizing_value: sizingValue,
+      });
+      handleProvisionResult(res);
+    } catch (err) {
+      const message = err instanceof ApiError ? err.message : err instanceof Error ? err.message : "Provisioning failed";
+      setFormError(message);
+      toast.error(message);
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  const canContinue = () => {
+    if (step === 0) return !!role;
+    return true;
   };
 
   return (
@@ -65,7 +223,7 @@ function Onboarding() {
         <div className="mx-auto flex h-16 max-w-3xl items-center justify-between px-5">
           <Logo />
           <span className="text-xs text-muted-foreground">
-            Step {step + 1} of {steps.length}
+            Step {Math.min(step + 1, steps.length)} of {steps.length}
           </span>
         </div>
       </header>
@@ -144,84 +302,99 @@ function Onboarding() {
         {step === 1 && role === "follower" && (
           <Panel title="Pick a master to copy" sub="Change or add more later — Pro allows unlimited subscriptions.">
             <div className="space-y-3">
-              {MASTERS.filter((m) => m.visible)
-                .slice(0, 5)
-                .map((m) => (
-                  <button
-                    key={m.id}
-                    onClick={() => setMasterId(m.id)}
-                    className={cn(
-                      "flex w-full items-center gap-4 rounded-lg border p-4 text-left transition-colors",
-                      masterId === m.id ? "border-primary bg-surface-2" : "border-border bg-surface",
-                    )}
-                  >
-                    <Avatar name={m.name} />
-                    <div className="min-w-0 flex-1">
-                      <div className="truncate font-medium">{m.name}</div>
-                      <div className="truncate text-xs text-muted-foreground">
-                        {m.strategy} · {m.platform}
-                      </div>
+              {mastersQuery.isLoading && <p className="text-sm text-muted-foreground">Loading…</p>}
+              {!mastersQuery.isLoading && visibleMasters.length === 0 && (
+                <p className="text-sm text-muted-foreground">No masters available yet.</p>
+              )}
+              {visibleMasters.map((m) => (
+                <button
+                  key={m.account_id}
+                  onClick={() => setMasterId(m.account_id)}
+                  className={cn(
+                    "flex w-full items-center gap-4 rounded-lg border p-4 text-left transition-colors",
+                    masterId === m.account_id ? "border-primary bg-surface-2" : "border-border bg-surface",
+                  )}
+                >
+                  <Avatar name={m.display_name ?? "Master"} />
+                  <div className="min-w-0 flex-1">
+                    <div className="truncate font-medium">{m.display_name ?? "Unnamed master"}</div>
+                    <div className="truncate text-xs text-muted-foreground">
+                      {m.bio ?? "No bio yet"} · {m.platform ?? "—"}
                     </div>
-                    <div className="text-right">
-                      <PnL value={m.return30d} prefix="" suffix="%" digits={1} className="text-sm" />
-                      <div className="text-[11px] text-muted-foreground">DD {m.maxDrawdown}%</div>
-                    </div>
-                  </button>
-                ))}
+                  </div>
+                  <div className="text-right text-xs text-muted-foreground">{m.country ?? ""}</div>
+                </button>
+              ))}
             </div>
           </Panel>
         )}
 
-        {((step === 2 && role === "master") || (step === 2 && role === "follower")) && (
+        {step === accountStepIndex && (role === "master" || role === "follower") && (
           <Panel
             title="Connect your broker account"
             sub={
               role === "master" && platform === "cTrader"
-                ? "cTrader uses OAuth — we only need your broker and account label."
+                ? "cTrader uses OAuth — we only need your broker label."
                 : "Use your trading credentials. CopyDesk cannot withdraw funds."
             }
           >
             <div className="grid gap-4 sm:grid-cols-2">
               <div className="space-y-1.5 sm:col-span-2">
-                <Label htmlFor="label">Account label</Label>
-                <Input id="label" placeholder="Primary follower — IC Markets" />
+                <Label htmlFor="broker">Broker name (optional)</Label>
+                <Input
+                  id="broker"
+                  placeholder="IC Markets"
+                  value={broker}
+                  onChange={(e) => setBroker(e.target.value)}
+                />
               </div>
-              <div className="space-y-1.5">
-                <Label>Broker</Label>
-                <Select defaultValue={BROKERS[0]!.name}>
-                  <SelectTrigger>
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {BROKERS.filter((b) => (role === "master" ? b.platform === platform : b.platform === "MT5")).map(
-                      (b) => (
-                        <SelectItem key={b.name} value={b.name}>
-                          {b.name} · {b.platform}
-                        </SelectItem>
-                      ),
-                    )}
-                  </SelectContent>
-                </Select>
-              </div>
-              <div className="space-y-1.5">
-                <Label htmlFor="server">Server</Label>
-                <Input id="server" placeholder="ICMarkets-Live12" />
-              </div>
-              <div className="space-y-1.5">
-                <Label htmlFor="login">Account login</Label>
-                <Input id="login" placeholder="51840223" className="num" />
-              </div>
-              <div className="space-y-1.5">
-                <Label htmlFor="pw">Trading password</Label>
-                <Input id="pw" type="password" placeholder="••••••••" />
-              </div>
+              {!(role === "master" && platform === "cTrader") && (
+                <>
+                  <div className="space-y-1.5">
+                    <Label htmlFor="server">Server</Label>
+                    <Input
+                      id="server"
+                      placeholder="ICMarkets-Live12"
+                      value={server}
+                      onChange={(e) => setServer(e.target.value)}
+                    />
+                  </div>
+                  <div className="space-y-1.5">
+                    <Label htmlFor="login">Account login</Label>
+                    <Input
+                      id="login"
+                      placeholder="51840223"
+                      className="num"
+                      value={login}
+                      onChange={(e) => setLogin(e.target.value)}
+                    />
+                  </div>
+                  <div className="space-y-1.5">
+                    <Label htmlFor="pw">Trading password</Label>
+                    <Input
+                      id="pw"
+                      type="password"
+                      placeholder="••••••••"
+                      value={password}
+                      onChange={(e) => setPassword(e.target.value)}
+                    />
+                  </div>
+                </>
+              )}
               {role === "master" && (
                 <div className="space-y-1.5 sm:col-span-2">
                   <Label htmlFor="bio">Public strategy description</Label>
-                  <Textarea id="bio" rows={3} placeholder="London breakout on majors, fixed 1% risk, no grid…" />
+                  <Textarea
+                    id="bio"
+                    rows={3}
+                    placeholder="London breakout on majors, fixed 1% risk, no grid…"
+                    value={bio}
+                    onChange={(e) => setBio(e.target.value)}
+                  />
                 </div>
               )}
             </div>
+            {formError && <p className="mt-4 text-sm text-destructive">{formError}</p>}
           </Panel>
         )}
 
@@ -270,7 +443,7 @@ function Onboarding() {
             {sizing === "risk-percent" && (
               <div className="mt-6 rounded-lg border border-border bg-surface p-5">
                 <div className="flex items-center justify-between">
-                  <Label>Risk per trade</Label>
+                  <Label>Risk % of equity per trade</Label>
                   <span className="num text-primary">{risk.toFixed(2)}%</span>
                 </div>
                 <Slider
@@ -286,6 +459,52 @@ function Onboarding() {
                 </p>
               </div>
             )}
+
+            {sizing === "fixed-lot" && (
+              <div className="mt-6 space-y-1.5 rounded-lg border border-border bg-surface p-5">
+                <Label htmlFor="fixed-lot">Lot size per trade</Label>
+                <Input
+                  id="fixed-lot"
+                  className="num"
+                  type="number"
+                  min="0.01"
+                  step="0.01"
+                  value={fixedLot}
+                  onChange={(e) => setFixedLot(e.target.value)}
+                />
+              </div>
+            )}
+
+            {sizing === "micro-scale" && (
+              <div className="mt-6 space-y-1.5 rounded-lg border border-border bg-surface p-5">
+                <Label htmlFor="micro-lot">Minimum lot size</Label>
+                <Input
+                  id="micro-lot"
+                  className="num"
+                  type="number"
+                  min="0.01"
+                  step="0.01"
+                  value={microLot}
+                  onChange={(e) => setMicroLot(e.target.value)}
+                />
+              </div>
+            )}
+
+            {formError && <p className="mt-4 text-sm text-destructive">{formError}</p>}
+          </Panel>
+        )}
+
+        {step === doneStepIndex && (
+          <Panel
+            title={doneInfo?.status === "ctrader_connected" ? "cTrader connected" : "You're all set"}
+            sub={doneInfo?.message ?? undefined}
+          >
+            <div className="rounded-lg border border-border bg-surface p-6 text-center">
+              <Check className="mx-auto h-8 w-8 text-primary" />
+              <p className="mt-3 text-sm text-muted-foreground">
+                Your account is live. Head to your dashboard to watch it work.
+              </p>
+            </div>
           </Panel>
         )}
 
@@ -293,16 +512,22 @@ function Onboarding() {
           <Button
             variant="ghost"
             onClick={() => setStep((s) => Math.max(0, s - 1))}
-            disabled={step === 0}
+            disabled={step === 0 || step === doneStepIndex}
           >
             <ArrowLeft className="mr-1 h-4 w-4" /> Back
           </Button>
-          <Button
-            disabled={step === 0 && !role}
-            onClick={() => (step === last ? finish() : setStep((s) => s + 1))}
-          >
-            {step === last ? "Finish setup" : "Continue"} <ArrowRight className="ml-1 h-4 w-4" />
-          </Button>
+          {step === doneStepIndex ? (
+            <Button onClick={goDashboard}>
+              Go to dashboard <ArrowRight className="ml-1 h-4 w-4" />
+            </Button>
+          ) : (
+            <Button
+              disabled={!canContinue() || submitting}
+              onClick={() => (step === last - 1 || (role === "master" && step === last - 1) ? finish() : step === last ? undefined : (step === accountStepIndex && role === "master") || (steps[step + 1] === "Done") ? finish() : setStep((s) => s + 1))}
+            >
+              {step + 1 === last ? (submitting ? "Submitting…" : "Finish setup") : "Continue"} <ArrowRight className="ml-1 h-4 w-4" />
+            </Button>
+          )}
         </div>
       </div>
     </div>
