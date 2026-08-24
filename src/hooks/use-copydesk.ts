@@ -6,8 +6,10 @@ import {
   supabase,
   fetchMyAccounts,
   fetchActivePackages,
+  fetchActiveSubscription,
   type AccountRow,
   type LiveAccountStateRow,
+  type SubscriptionRow,
 } from "@/lib/supabase";
 import { endpoints, type DirectoryMaster } from "@/lib/api";
 
@@ -176,4 +178,21 @@ export function useAccountTrades(accountId: string | null | undefined) {
 
 export function usePackages() {
   return useQuery({ queryKey: ["packages"], queryFn: fetchActivePackages, staleTime: 300_000 });
+}
+
+/* ------------------------------------------------------- subscriptions */
+
+export function useAccountSubscriptions(accountIds: string[]) {
+  const key = accountIds.slice().sort().join(",");
+  return useQuery({
+    queryKey: ["account-subscriptions", key],
+    queryFn: async () => {
+      const ids = key ? key.split(",") : [];
+      const entries = await Promise.all(
+        ids.map(async (id) => [id, await fetchActiveSubscription(id)] as const),
+      );
+      return Object.fromEntries(entries) as Record<string, SubscriptionRow | null>;
+    },
+    enabled: !!key,
+  });
 }
