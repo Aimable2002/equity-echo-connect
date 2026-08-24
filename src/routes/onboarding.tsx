@@ -523,9 +523,9 @@ function Onboarding() {
           ) : (
             <Button
               disabled={!canContinue() || submitting}
-              onClick={() => (step === last - 1 || (role === "master" && step === last - 1) ? finish() : step === last ? undefined : (step === accountStepIndex && role === "master") || (steps[step + 1] === "Done") ? finish() : setStep((s) => s + 1))}
+              onClick={() => (step === last - 1 ? finish() : setStep((s) => s + 1))}
             >
-              {step + 1 === last ? (submitting ? "Submitting…" : "Finish setup") : "Continue"} <ArrowRight className="ml-1 h-4 w-4" />
+              {step === last - 1 ? (submitting ? "Submitting…" : "Finish setup") : "Continue"} <ArrowRight className="ml-1 h-4 w-4" />
             </Button>
           )}
         </div>

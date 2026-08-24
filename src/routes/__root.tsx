@@ -77,14 +77,20 @@ export const Route = createRootRouteWithContext<{ queryClient: QueryClient }>()(
     meta: [
       { charSet: "utf-8" },
       { name: "viewport", content: "width=device-width, initial-scale=1" },
-      { title: "Lovable App" },
-      { name: "description", content: "Lovable Generated Project" },
-      { name: "author", content: "Lovable" },
-      { property: "og:title", content: "Lovable App" },
-      { property: "og:description", content: "Lovable Generated Project" },
+      { title: "CopyDesk — Live copy trading for MT5 & cTrader" },
+      {
+        name: "description",
+        content:
+          "Copy verified live traders on your own MT5 or cTrader account, with millisecond relay, transparent stats and subscription-only pricing.",
+      },
+      { property: "og:title", content: "CopyDesk — Live copy trading for MT5 & cTrader" },
+      {
+        property: "og:description",
+        content:
+          "Copy verified live traders on your own MT5 or cTrader account, with millisecond relay and transparent stats.",
+      },
       { property: "og:type", content: "website" },
       { name: "twitter:card", content: "summary_large_image" },
-      { name: "twitter:site", content: "@Lovable" },
     ],
     links: [
       {
