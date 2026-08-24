@@ -152,10 +152,7 @@ export function freshnessMs(updatedAt: string | null | undefined) {
 export function useMastersDirectory() {
   return useQuery({
     queryKey: ["masters-directory"],
-    queryFn: async (): Promise<DirectoryMaster[]> => {
-      const res = await endpoints.mastersDirectory();
-      return Array.isArray(res) ? res : (res?.masters ?? []);
-    },
+    queryFn: (): Promise<DirectoryMaster[]> => endpoints.mastersDirectory(),
     staleTime: 60_000,
   });
 }
