@@ -1,13 +1,20 @@
 import { createFileRoute, Link } from "@tanstack/react-router";
-import { useState } from "react";
+import { useEffect, useState } from "react";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { CheckCircle2, Clock, Search, XCircle } from "lucide-react";
 import { Logo, StatusDot } from "@/components/brand";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { TRANSACTIONS, fmtDate, fmtMoney } from "@/lib/mock";
+import { endpoints } from "@/lib/api";
+import { fmtDate, fmtMoney } from "@/lib/format";
+
+type PaymentStatusSearch = { reference?: string };
 
 export const Route = createFileRoute("/payment-status")({
+  validateSearch: (search: Record<string, unknown>): PaymentStatusSearch => ({
+    reference: typeof search.reference === "string" ? search.reference : undefined,
+  }),
   head: () => ({
     meta: [
       { title: "Payment status lookup — CopyDesk" },
@@ -26,21 +33,78 @@ export const Route = createFileRoute("/payment-status")({
   component: PaymentStatus,
 });
 
-type Tx = (typeof TRANSACTIONS)[number];
+function pickStr(o: Record<string, unknown> | undefined | null, keys: string[], fallback = ""): string {
+  if (!o) return fallback;
+  for (const k of keys) {
+    const v = o[k];
+    if (v !== undefined && v !== null && v !== "") return String(v);
+  }
+  return fallback;
+}
+
+function pickNum(o: Record<string, unknown> | undefined | null, keys: string[], fallback = 0): number {
+  if (!o) return fallback;
+  for (const k of keys) {
+    const v = o[k];
+    if (v !== undefined && v !== null && v !== "" && !Number.isNaN(Number(v))) return Number(v);
+  }
+  return fallback;
+}
 
 function PaymentStatus() {
-  const [ref, setRef] = useState("TX-88214");
-  const [result, setResult] = useState<Tx | null | undefined>(undefined);
+  const search = Route.useSearch();
+  const [ref, setRef] = useState(search.reference ?? "");
+  const [activeRef, setActiveRef] = useState<string | null>(search.reference ?? null);
+  const queryClient = useQueryClient();
+
+  useEffect(() => {
+    if (search.reference) {
+      setRef(search.reference);
+      setActiveRef(search.reference);
+    }
+  }, [search.reference]);
+
+  const statusQuery = useQuery({
+    queryKey: ["payment-status", activeRef],
+    queryFn: () => endpoints.paymentStatus(activeRef!),
+    enabled: !!activeRef,
+    refetchInterval: (query) => {
+      const status = pickStr(query.state.data as Record<string, unknown> | undefined, ["status"], "pending");
+      return status === "pending" ? 4000 : false;
+    },
+  });
 
   const lookup = (e: React.FormEvent) => {
     e.preventDefault();
-    setResult(TRANSACTIONS.find((t) => t.id.toLowerCase() === ref.trim().toLowerCase()) ?? null);
+    const trimmed = ref.trim();
+    if (!trimmed) return;
+    if (trimmed === activeRef) {
+      void queryClient.invalidateQueries({ queryKey: ["payment-status", activeRef] });
+    } else {
+      setActiveRef(trimmed);
+    }
   };
 
+  const data = statusQuery.data;
+  const notFound = activeRef !== null && statusQuery.isFetched && !statusQuery.isLoading && !data;
+  const status = pickStr(data, ["status"], "");
+  const amount = pickNum(data, ["amount_usd", "amount", "value"]);
+  const description = pickStr(data, ["description", "purpose", "type"], "—");
+  const method = pickStr(data, ["method", "payment_method", "channel"], "—");
+  const date = pickStr(data, ["created_at", "date", "timestamp"], "");
+
   const Icon =
-    result?.status === "completed" ? CheckCircle2 : result?.status === "failed" ? XCircle : Clock;
+    status === "successful" || status === "completed"
+      ? CheckCircle2
+      : status === "failed"
+        ? XCircle
+        : Clock;
   const tone =
-    result?.status === "completed" ? "text-long" : result?.status === "failed" ? "text-short" : "text-warn";
+    status === "successful" || status === "completed"
+      ? "text-long"
+      : status === "failed"
+        ? "text-short"
+        : "text-warn";
 
   return (
     <div className="min-h-screen">
@@ -66,64 +130,49 @@ function PaymentStatus() {
           </Button>
         </form>
 
-        {result === null && (
+        {notFound && (
           <div className="panel mt-6 p-6 text-sm text-muted-foreground">
-            No payment found for <span className="num text-foreground">{ref}</span>. References look
-            like <span className="num">TX-88214</span>. Bank transfers can take up to 2 business days
-            to appear.
+            No payment found for <span className="num text-foreground">{activeRef}</span>. References
+            look like <span className="num">TX-88214</span>.
           </div>
         )}
 
-        {result && (
+        {statusQuery.isLoading && activeRef && (
+          <div className="panel mt-6 p-6 text-sm text-muted-foreground">Loading…</div>
+        )}
+
+        {data && (
           <div className="panel mt-6 p-6">
             <div className="flex items-center gap-3">
               <Icon className={`h-6 w-6 ${tone}`} />
               <div>
-                <div className="font-display text-xl font-semibold capitalize">{result.status}</div>
-                <div className="text-xs text-muted-foreground">Reference {result.id}</div>
+                <div className="font-display text-xl font-semibold capitalize">{status || "unknown"}</div>
+                <div className="text-xs text-muted-foreground">Reference {activeRef}</div>
               </div>
               <div className="ml-auto text-right">
-                <div className="num text-2xl font-semibold">{fmtMoney(Math.abs(result.amount))}</div>
-                <StatusDot status={result.status} />
+                <div className="num text-2xl font-semibold">{fmtMoney(Math.abs(amount))}</div>
+                <StatusDot status={status || "pending"} />
               </div>
             </div>
             <dl className="mt-6 grid gap-3 border-t border-border pt-5 text-sm sm:grid-cols-2">
-              <Row k="Description" v={result.desc} />
-              <Row k="Method" v={result.method} />
-              <Row k="Date" v={fmtDate(result.date)} />
-              <Row k="Direction" v={result.amount >= 0 ? "Credit to wallet" : "Debit from wallet"} />
+              <Row k="Description" v={description} />
+              <Row k="Method" v={method} />
+              <Row k="Date" v={fmtDate(date)} />
+              <Row k="Direction" v={amount >= 0 ? "Credit to wallet" : "Debit from wallet"} />
             </dl>
-            {result.status === "pending" && (
+            {status === "pending" && (
               <p className="mt-5 rounded-md border border-border bg-surface-2 p-4 text-xs text-muted-foreground">
                 Awaiting settlement confirmation from the payment provider. Your wallet is credited
                 automatically once funds clear — no action needed.
               </p>
             )}
-            {result.status === "failed" && (
+            {status === "failed" && (
               <Button asChild className="mt-5">
                 <Link to="/checkout">Retry payment</Link>
               </Button>
             )}
           </div>
         )}
-
-        <div className="mt-10 text-sm">
-          <div className="text-muted-foreground">Recent references on this account</div>
-          <div className="mt-3 flex flex-wrap gap-2">
-            {TRANSACTIONS.slice(0, 5).map((t) => (
-              <button
-                key={t.id}
-                onClick={() => {
-                  setRef(t.id);
-                  setResult(t);
-                }}
-                className="num rounded-md border border-border bg-surface px-3 py-1.5 text-xs hover:border-primary"
-              >
-                {t.id}
-              </button>
-            ))}
-          </div>
-        </div>
 
         <p className="mt-10 text-xs text-muted-foreground">
           <Link to="/wallet" className="hover:text-foreground">

@@ -2,7 +2,6 @@ import { createFileRoute, Link } from "@tanstack/react-router";
 import { CheckCircle2 } from "lucide-react";
 import { MarketingFooter, MarketingNav } from "@/components/marketing";
 import { SectionTitle } from "@/components/brand";
-import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
   Accordion,
@@ -10,7 +9,9 @@ import {
   AccordionItem,
   AccordionTrigger,
 } from "@/components/ui/accordion";
-import { PLANS } from "@/lib/mock";
+import { usePackages } from "@/hooks/use-copydesk";
+import { packageName, packagePrice } from "@/lib/supabase";
+import { fmtMoney } from "@/lib/format";
 
 export const Route = createFileRoute("/pricing")({
   head: () => ({
@@ -34,7 +35,7 @@ export const Route = createFileRoute("/pricing")({
 const FAQ = [
   [
     "Do you take a cut of my trading profits?",
-    "No. CopyDesk charges a flat monthly subscription. Individual masters may charge their own performance or monthly fee, which is always shown on their profile before you start copying.",
+    "No. CopyDesk charges a flat monthly subscription only — there are no profit shares or performance fees, for you or from masters.",
   ],
   [
     "Can I copy on a $150 account?",
@@ -51,6 +52,8 @@ const FAQ = [
 ] as const;
 
 function Pricing() {
+  const { data: packages = [] } = usePackages();
+
   return (
     <div className="min-h-screen">
       <MarketingNav />
@@ -63,29 +66,31 @@ function Pricing() {
             sub="Your broker charges what your broker charges. We don't touch it, mark it up, or take a rebate for routing you."
           />
           <div className="mt-14 grid gap-6 lg:grid-cols-3">
-            {PLANS.map((p) => (
-              <div
-                key={p.id}
-                className={`panel flex flex-col p-7 ${p.highlight ? "ring-1 ring-primary/60" : ""}`}
-                style={p.highlight ? { boxShadow: "var(--shadow-lift)" } : undefined}
-              >
-                {p.highlight && <Badge className="mb-4 w-fit">Most popular</Badge>}
-                <div className="font-display text-lg font-semibold">{p.name}</div>
+            {packages.map((p) => (
+              <div key={p.code} className="panel flex flex-col p-7">
+                <div className="font-display text-lg font-semibold">{packageName(p)}</div>
                 <div className="num mt-3 text-4xl font-bold">
-                  ${p.price}
+                  {fmtMoney(packagePrice(p))}
                   <span className="text-sm font-normal text-muted-foreground">/mo</span>
                 </div>
-                <p className="mt-2 text-sm text-muted-foreground">{p.tagline}</p>
+                <p className="mt-2 text-sm text-muted-foreground">
+                  {p.base_roster_size} roster slot{p.base_roster_size === 1 ? "" : "s"} included · billed
+                  every {p.duration_days} days
+                </p>
                 <ul className="mt-6 flex-1 space-y-2.5 text-sm">
-                  {p.features.map((f) => (
+                  {[
+                    `${p.base_roster_size} master slots in your roster`,
+                    `${fmtMoney(Number(p.slot_fee_per_slot))} per additional roster slot`,
+                    `${p.duration_days}-day billing cycle`,
+                  ].map((f) => (
                     <li key={f} className="flex gap-2.5">
                       <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0 text-primary" />
                       <span className="text-muted-foreground">{f}</span>
                     </li>
                   ))}
                 </ul>
-                <Button asChild className="mt-7" variant={p.highlight ? "default" : "outline"}>
-                  <Link to="/checkout">{p.cta}</Link>
+                <Button asChild className="mt-7" variant="outline">
+                  <Link to="/checkout">Get started</Link>
                 </Button>
               </div>
             ))}

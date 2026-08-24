@@ -1,11 +1,9 @@
-import { createFileRoute, Link, notFound } from "@tanstack/react-router";
+import { createFileRoute, Link, useParams } from "@tanstack/react-router";
 import { useState } from "react";
 import { Pause, Play, XCircle } from "lucide-react";
 import {
   Area,
   AreaChart,
-  Bar,
-  BarChart,
   CartesianGrid,
   ResponsiveContainer,
   Tooltip,
@@ -13,6 +11,7 @@ import {
   YAxis,
 } from "recharts";
 import { toast } from "sonner";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { AppShell } from "@/components/app-shell";
 import { PnL, Stat, StatusDot } from "@/components/brand";
 import { Badge } from "@/components/ui/badge";
@@ -20,6 +19,13 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import {
   Table,
@@ -29,117 +35,254 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
-import {
-  COPIERS,
-  EARNINGS,
-  EQUITY_SUMMARY,
-  PAYOUTS,
-  SPEND_HISTORY,
-  WALLET,
-  allTrades,
-  fmtDate,
-  fmtMoney,
-  fmtTime,
-  getAccount,
-  getMaster,
-} from "@/lib/mock";
+import { ApiError, endpoints, type PayoutBody } from "@/lib/api";
+import { fetchActiveSubscription } from "@/lib/supabase";
+import { useLiveAccountState, useMastersDirectory, useMyAccounts } from "@/hooks/use-copydesk";
+import { computeStats, dealSide, closedDeals } from "@/lib/trades";
+import { fmtDate, fmtMoney, fmtTime } from "@/lib/format";
 
 export const Route = createFileRoute("/accounts/$accountId")({
-  loader: ({ params }) => {
-    const account = getAccount(params.accountId);
-    if (!account) throw notFound();
-    return { account };
-  },
-  head: ({ loaderData }) => {
-    if (!loaderData) {
-      return {
-        meta: [{ title: "Account not found — CopyDesk" }, { name: "robots", content: "noindex" }],
-      };
-    }
-    const a = loaderData.account;
-    const title = `${a.label} — account controls | CopyDesk`;
-    const description = `Manage this ${a.role} account on ${a.platform} at ${a.broker}: pause or close copying, review performance, billing and trade activity.`;
-    return {
-      meta: [
-        { title },
-        { name: "description", content: description },
-        { property: "og:title", content: title },
-        { property: "og:description", content: description },
-      ],
-    };
-  },
+  head: () => ({
+    meta: [
+      { title: "Account controls | CopyDesk" },
+      {
+        name: "description",
+        content:
+          "Manage this account: pause or close copying, review performance, billing and trade activity.",
+      },
+    ],
+  }),
   component: AccountDetails,
 });
 
-const trades = allTrades("account").slice(0, 18);
+function num(v: unknown): number {
+  const n = Number(v);
+  return Number.isFinite(n) ? n : 0;
+}
 
 function AccountDetails() {
-  const { account } = Route.useLoaderData();
-  const [status, setStatus] = useState(account.status);
-  const master = account.copying ? getMaster(account.copying) : null;
-  const isMaster = account.role === "master";
+  const { accountId } = useParams({ from: "/accounts/$accountId" });
+  const queryClient = useQueryClient();
+  const { data: accounts = [], isLoading: accountsLoading } = useMyAccounts();
+  const account = accounts.find((a) => a.account_id === accountId) ?? null;
+  const isMaster = account?.role === "master";
+
+  const liveState = useLiveAccountState(accountId ? [accountId] : []);
+  const live = liveState[accountId] ?? null;
+  const balance = live?.balance ?? 0;
+  const equity = live?.equity ?? 0;
+  const positions = live?.open_positions ?? [];
+  const openPnl = positions.reduce((s, p) => s + num(p.pnl), 0);
+
+  const [busy, setBusy] = useState(false);
+
+  const tradesQuery = useQuery({
+    queryKey: ["account-trades", accountId],
+    queryFn: () => endpoints.accountTrades(accountId),
+    enabled: !!accountId,
+  });
+  const trades = tradesQuery.data ?? [];
+  const stats = computeStats(trades, balance);
+  const closed = closedDeals(trades).slice(-18).reverse();
+
+  const subscriptionQuery = useQuery({
+    queryKey: ["active-subscription", accountId],
+    queryFn: () => fetchActiveSubscription(accountId),
+    enabled: !!accountId && !isMaster,
+  });
+  const subscription = subscriptionQuery.data ?? null;
+
+  const mastersDirectory = useMastersDirectory();
+  const currentMaster = mastersDirectory.data?.find(
+    (m) => m.account_id === subscription?.master_account_id,
+  );
+
+  const [switchOpen, setSwitchOpen] = useState(false);
+  const [switchTarget, setSwitchTarget] = useState<string>("");
+
+  const walletQuery = useQuery({
+    queryKey: ["wallet", accountId],
+    queryFn: () => endpoints.wallet(accountId),
+    enabled: !!accountId && !isMaster,
+  });
+  const walletTxQuery = useQuery({
+    queryKey: ["wallet-transactions", accountId],
+    queryFn: () => endpoints.walletTransactions(accountId),
+    enabled: !!accountId && !isMaster,
+  });
+
+  const profileState = useState({ display_name: "", bio: "", country: "" });
+  const [profile, setProfile] = profileState;
+
+  const earningsQuery = useQuery({
+    queryKey: ["master-earnings", accountId],
+    queryFn: () => endpoints.masterEarnings(accountId),
+    enabled: !!accountId && isMaster,
+  });
+  const payoutsQuery = useQuery({
+    queryKey: ["master-payouts", accountId],
+    queryFn: () => endpoints.masterPayouts(accountId),
+    enabled: !!accountId && isMaster,
+  });
+  const followersQuery = useQuery({
+    queryKey: ["master-followers", accountId],
+    queryFn: () => endpoints.masterFollowers(accountId),
+    enabled: !!accountId && isMaster,
+  });
+
+  const [payoutForm, setPayoutForm] = useState<PayoutBody>({
+    amount: 0,
+    recipient_name: "",
+    recipient_phone: "",
+    payout_method: "mobile_money",
+    payout_account_number: "",
+  });
+
+  const refetchAccounts = () => queryClient.invalidateQueries({ queryKey: ["accounts"] });
+
+  const pause = async () => {
+    if (!accountId) return;
+    setBusy(true);
+    try {
+      await endpoints.pauseAccount(accountId);
+      toast.success("Copying paused — open positions untouched");
+      refetchAccounts();
+    } catch (e) {
+      toast.error(e instanceof ApiError ? e.message : "Could not pause account");
+    } finally {
+      setBusy(false);
+    }
+  };
+  const resume = async () => {
+    if (!accountId) return;
+    setBusy(true);
+    try {
+      await endpoints.resumeAccount(accountId);
+      toast.success("Copying resumed");
+      refetchAccounts();
+    } catch (e) {
+      toast.error(e instanceof ApiError ? e.message : "Could not resume account");
+    } finally {
+      setBusy(false);
+    }
+  };
+  const close = async () => {
+    if (!accountId) return;
+    setBusy(true);
+    try {
+      await endpoints.closeAccount(accountId);
+      toast.error("Account closed — all positions flattened");
+      refetchAccounts();
+    } catch (e) {
+      toast.error(e instanceof ApiError ? e.message : "Could not close account");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const saveProfile = async () => {
+    if (!accountId) return;
+    try {
+      await endpoints.updateMasterProfile(accountId, {
+        display_name: profile.display_name,
+        bio: profile.bio,
+        country: profile.country || null,
+      });
+      toast.success("Profile saved");
+    } catch (e) {
+      toast.error(e instanceof ApiError ? e.message : "Could not save profile");
+    }
+  };
+
+  const submitPayout = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!accountId) return;
+    try {
+      await endpoints.requestPayout(accountId, payoutForm);
+      toast.success("Payout request submitted — settled manually by admin");
+      queryClient.invalidateQueries({ queryKey: ["master-payouts", accountId] });
+    } catch (e) {
+      toast.error(e instanceof ApiError ? e.message : "Could not submit payout request");
+    }
+  };
+
+  const doSwitch = async () => {
+    if (!accountId || !switchTarget) return;
+    try {
+      await endpoints.switchMaster(accountId, switchTarget);
+      toast.success("Master switched");
+      queryClient.invalidateQueries({ queryKey: ["active-subscription", accountId] });
+      setSwitchOpen(false);
+    } catch (e) {
+      toast.error(e instanceof ApiError ? e.message : "Could not switch master");
+    }
+  };
+
+  if (accountsLoading) {
+    return (
+      <AppShell title="Account" subtitle="Loading…">
+        <div className="panel p-6 text-sm text-muted-foreground">Loading…</div>
+      </AppShell>
+    );
+  }
+
+  if (!account) {
+    return (
+      <AppShell title="Account not found" subtitle="">
+        <div className="panel p-6 text-sm text-muted-foreground">
+          This account doesn't exist or isn't yours.
+        </div>
+      </AppShell>
+    );
+  }
+
+  const status = account.status ?? "unknown";
 
   return (
     <AppShell
-      title={account.label}
-      subtitle={`${account.platform} · ${account.broker} · #${account.login} · opened ${fmtDate(account.createdAt)}`}
+      title={account.mt_login ? `Account #${account.mt_login}` : "Account"}
+      subtitle={`${account.platform ?? "—"} · ${account.broker ?? "—"} · #${account.mt_login ?? "—"} · opened ${fmtDate(account.created_at)}`}
       actions={
         <div className="flex items-center gap-2">
           {status === "live" ? (
-            <Button
-              size="sm"
-              variant="outline"
-              onClick={() => {
-                setStatus("paused");
-                toast.success("Copying paused — open positions untouched");
-              }}
-            >
+            <Button size="sm" variant="outline" onClick={pause} disabled={busy}>
               <Pause className="mr-1 h-4 w-4" /> Pause
             </Button>
           ) : (
-            <Button
-              size="sm"
-              onClick={() => {
-                setStatus("live");
-                toast.success("Copying resumed");
-              }}
-              disabled={status === "closed"}
-            >
+            <Button size="sm" onClick={resume} disabled={busy || status === "closed"}>
               <Play className="mr-1 h-4 w-4" /> Resume
             </Button>
           )}
-          <Button
-            size="sm"
-            variant="ghost"
-            className="text-destructive"
-            onClick={() => {
-              setStatus("closed");
-              toast.error("Account closed — all positions flattened");
-            }}
-          >
+          <Button size="sm" variant="ghost" className="text-destructive" onClick={close} disabled={busy}>
             <XCircle className="mr-1 h-4 w-4" /> Close
           </Button>
         </div>
       }
     >
       <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
-        <Stat label="Balance" value={fmtMoney(account.balance)} />
-        <Stat label="Equity" value={fmtMoney(account.equity)} />
-        <Stat label="Open P&L" value={<PnL value={account.openPnl} className="text-2xl" />} />
+        <Stat label="Balance" value={fmtMoney(balance)} />
+        <Stat label="Equity" value={fmtMoney(equity)} />
+        <Stat label="Open P&L" value={<PnL value={openPnl} className="text-2xl" />} />
         <div className="panel p-4">
           <div className="text-[11px] uppercase tracking-[0.14em] text-muted-foreground">Status</div>
           <div className="mt-3">
             <StatusDot status={status} />
           </div>
           <div className="mt-2 text-xs text-muted-foreground">
-            {master ? (
+            {!isMaster && currentMaster ? (
               <>
                 Copying{" "}
-                <Link to="/masters/$masterId" params={{ masterId: master.id }} className="text-primary hover:underline">
-                  {master.name}
+                <Link
+                  to="/masters/$masterId"
+                  params={{ masterId: currentMaster.account_id }}
+                  className="text-primary hover:underline"
+                >
+                  {currentMaster.display_name ?? "Master"}
                 </Link>{" "}
-                · {account.sizingMode} {account.sizingValue}
+                · {subscription?.sizing_mode} {subscription?.sizing_value ?? ""}
               </>
+            ) : !isMaster ? (
+              "Not currently copying a master"
             ) : (
               "Publishing signals to followers"
             )}
@@ -164,7 +307,7 @@ function AccountDetails() {
             <h3 className="font-display font-semibold">Equity vs balance</h3>
             <div className="mt-5 h-72">
               <ResponsiveContainer width="100%" height="100%">
-                <AreaChart data={EQUITY_SUMMARY}>
+                <AreaChart data={stats.curve}>
                   <defs>
                     <linearGradient id="ac" x1="0" y1="0" x2="0" y2="1">
                       <stop offset="0%" stopColor="var(--brand)" stopOpacity={0.35} />
@@ -180,6 +323,40 @@ function AccountDetails() {
               </ResponsiveContainer>
             </div>
           </div>
+          {!isMaster && (
+            <div className="panel mt-6 p-5">
+              <div className="flex flex-wrap items-center justify-between gap-3">
+                <h3 className="font-display font-semibold">Current master</h3>
+                <Button size="sm" variant="outline" onClick={() => setSwitchOpen((o) => !o)}>
+                  Switch master
+                </Button>
+              </div>
+              {switchOpen && (
+                <div className="mt-4 flex flex-wrap items-end gap-3">
+                  <div className="min-w-56 space-y-1.5">
+                    <Label>New master</Label>
+                    <Select value={switchTarget} onValueChange={setSwitchTarget}>
+                      <SelectTrigger>
+                        <SelectValue placeholder="Choose a master" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {(mastersDirectory.data ?? [])
+                          .filter((m) => m.account_id !== subscription?.master_account_id)
+                          .map((m) => (
+                            <SelectItem key={m.account_id} value={m.account_id}>
+                              {m.display_name ?? m.account_id.slice(0, 8)}
+                            </SelectItem>
+                          ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
+                  <Button size="sm" onClick={doSwitch} disabled={!switchTarget}>
+                    Confirm switch
+                  </Button>
+                </div>
+              )}
+            </div>
+          )}
         </TabsContent>
 
         {isMaster && (
@@ -189,27 +366,30 @@ function AccountDetails() {
               <div className="mt-5 grid gap-4">
                 <div className="space-y-1.5">
                   <Label htmlFor="dn">Display name</Label>
-                  <Input id="dn" defaultValue="Jonah Mwangi" />
-                </div>
-                <div className="space-y-1.5">
-                  <Label htmlFor="st">Strategy headline</Label>
-                  <Input id="st" defaultValue="London breakout on majors" />
+                  <Input
+                    id="dn"
+                    value={profile.display_name}
+                    onChange={(e) => setProfile((p) => ({ ...p, display_name: e.target.value }))}
+                  />
                 </div>
                 <div className="space-y-1.5">
                   <Label htmlFor="bio2">Bio</Label>
-                  <Textarea id="bio2" rows={4} defaultValue="Fixed 1% risk per position, no grid, no martingale. Sessions: London open and NY overlap." />
+                  <Textarea
+                    id="bio2"
+                    rows={4}
+                    value={profile.bio}
+                    onChange={(e) => setProfile((p) => ({ ...p, bio: e.target.value }))}
+                  />
                 </div>
-                <div className="grid gap-4 sm:grid-cols-2">
-                  <div className="space-y-1.5">
-                    <Label htmlFor="fee">Performance fee (%)</Label>
-                    <Input id="fee" className="num" defaultValue="20" />
-                  </div>
-                  <div className="space-y-1.5">
-                    <Label htmlFor="mf">Monthly fee (USD)</Label>
-                    <Input id="mf" className="num" defaultValue="29" />
-                  </div>
+                <div className="space-y-1.5">
+                  <Label htmlFor="co">Country</Label>
+                  <Input
+                    id="co"
+                    value={profile.country}
+                    onChange={(e) => setProfile((p) => ({ ...p, country: e.target.value }))}
+                  />
                 </div>
-                <Button className="w-fit" onClick={() => toast.success("Profile saved")}>
+                <Button className="w-fit" onClick={saveProfile}>
                   Save profile
                 </Button>
               </div>
@@ -219,42 +399,110 @@ function AccountDetails() {
 
         {isMaster && (
           <TabsContent value="earnings" className="mt-5">
-            <div className="grid gap-4 sm:grid-cols-3">
-              <Stat label="Earnings this month" value={fmtMoney(2140)} accent />
-              <Stat label="Lifetime fees" value={fmtMoney(28420)} />
-              <Stat label="Active copiers" value={COPIERS.filter((c) => c.status === "live").length.toString()} />
-            </div>
-            <div className="panel mt-6 p-5">
-              <h3 className="font-display font-semibold">Fee income by month</h3>
-              <div className="mt-5 h-60">
-                <ResponsiveContainer width="100%" height="100%">
-                  <BarChart data={EARNINGS}>
-                    <CartesianGrid stroke="var(--border)" vertical={false} />
-                    <XAxis dataKey="month" tick={ax} tickLine={false} axisLine={false} />
-                    <YAxis tick={ax} tickLine={false} axisLine={false} width={54} />
-                    <Tooltip contentStyle={tt} cursor={{ fill: "var(--accent)" }} />
-                    <Bar dataKey="fees" fill="var(--brand)" radius={[3, 3, 0, 0]} />
-                  </BarChart>
-                </ResponsiveContainer>
-              </div>
-            </div>
+            {earningsQuery.isLoading ? (
+              <div className="panel p-6 text-sm text-muted-foreground">Loading…</div>
+            ) : (
+              <>
+                <p className="text-xs text-muted-foreground">
+                  Earnings here are challenge rewards only — there is no performance-fee income.
+                </p>
+                <div className="mt-4 grid gap-4 sm:grid-cols-3">
+                  <Stat
+                    label="Rewards this month"
+                    value={fmtMoney(num((earningsQuery.data as Record<string, unknown> | undefined)?.this_month))}
+                    accent
+                  />
+                  <Stat
+                    label="Lifetime rewards"
+                    value={fmtMoney(num((earningsQuery.data as Record<string, unknown> | undefined)?.lifetime ?? (earningsQuery.data as Record<string, unknown> | undefined)?.total))}
+                  />
+                  <Stat
+                    label="Followers"
+                    value={(followersQuery.data ?? []).length.toString()}
+                  />
+                </div>
+              </>
+            )}
           </TabsContent>
         )}
 
         {isMaster && (
           <TabsContent value="payouts" className="mt-5">
             <div className="panel overflow-hidden">
-              <div className="flex items-center justify-between p-5">
-                <h3 className="font-display font-semibold">Payout requests</h3>
-                <Button size="sm" onClick={() => toast.success("Payout request submitted for review")}>
-                  Request payout
-                </Button>
+              <div className="p-5">
+                <h3 className="font-display font-semibold">Request a payout</h3>
+                <p className="mt-1 text-xs text-muted-foreground">
+                  Informational only — payouts are settled manually by an admin, there is no instant
+                  transfer.
+                </p>
+                <form onSubmit={submitPayout} className="mt-4 grid gap-3 sm:grid-cols-2">
+                  <div className="space-y-1.5">
+                    <Label htmlFor="amt">Amount</Label>
+                    <Input
+                      id="amt"
+                      className="num"
+                      type="number"
+                      value={payoutForm.amount || ""}
+                      onChange={(e) => setPayoutForm((p) => ({ ...p, amount: Number(e.target.value) }))}
+                    />
+                  </div>
+                  <div className="space-y-1.5">
+                    <Label htmlFor="rn">Recipient name</Label>
+                    <Input
+                      id="rn"
+                      value={payoutForm.recipient_name}
+                      onChange={(e) => setPayoutForm((p) => ({ ...p, recipient_name: e.target.value }))}
+                    />
+                  </div>
+                  <div className="space-y-1.5">
+                    <Label htmlFor="rp">Recipient phone</Label>
+                    <Input
+                      id="rp"
+                      value={payoutForm.recipient_phone}
+                      onChange={(e) => setPayoutForm((p) => ({ ...p, recipient_phone: e.target.value }))}
+                    />
+                  </div>
+                  <div className="space-y-1.5">
+                    <Label>Payout method</Label>
+                    <Select
+                      value={payoutForm.payout_method}
+                      onValueChange={(v) =>
+                        setPayoutForm((p) => ({ ...p, payout_method: v as PayoutBody["payout_method"] }))
+                      }
+                    >
+                      <SelectTrigger>
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="mobile_money">Mobile money</SelectItem>
+                        <SelectItem value="bank_transfer">Bank transfer</SelectItem>
+                        <SelectItem value="crypto">Crypto</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
+                  <div className="space-y-1.5 sm:col-span-2">
+                    <Label htmlFor="pan">
+                      {payoutForm.payout_method === "mobile_money"
+                        ? "Phone number"
+                        : payoutForm.payout_method === "bank_transfer"
+                          ? "Bank account number"
+                          : "Wallet address"}
+                    </Label>
+                    <Input
+                      id="pan"
+                      value={payoutForm.payout_account_number}
+                      onChange={(e) => setPayoutForm((p) => ({ ...p, payout_account_number: e.target.value }))}
+                    />
+                  </div>
+                  <Button type="submit" className="sm:col-span-2 w-fit">
+                    Request payout
+                  </Button>
+                </form>
               </div>
               <Table>
                 <TableHeader>
                   <TableRow>
                     <TableHead>Reference</TableHead>
-                    <TableHead>Period</TableHead>
                     <TableHead>Method</TableHead>
                     <TableHead>Requested</TableHead>
                     <TableHead className="text-right">Amount</TableHead>
@@ -262,15 +510,16 @@ function AccountDetails() {
                   </TableRow>
                 </TableHeader>
                 <TableBody>
-                  {PAYOUTS.map((p) => (
-                    <TableRow key={p.id}>
-                      <TableCell className="num text-xs">{p.id}</TableCell>
-                      <TableCell>{p.period}</TableCell>
-                      <TableCell className="text-xs text-muted-foreground">{p.method}</TableCell>
-                      <TableCell className="num text-xs text-muted-foreground">{fmtDate(p.requested)}</TableCell>
-                      <TableCell className="num text-right">{fmtMoney(p.amount)}</TableCell>
+                  {(payoutsQuery.data ?? []).map((p, i) => (
+                    <TableRow key={String(p.id ?? i)}>
+                      <TableCell className="num text-xs">{String(p.id ?? i)}</TableCell>
+                      <TableCell className="text-xs text-muted-foreground">{String(p.payout_method ?? "—")}</TableCell>
+                      <TableCell className="num text-xs text-muted-foreground">
+                        {fmtDate(p.created_at as string | undefined)}
+                      </TableCell>
+                      <TableCell className="num text-right">{fmtMoney(num(p.amount))}</TableCell>
                       <TableCell className="text-right">
-                        <StatusDot status={p.status} />
+                        <StatusDot status={String(p.status ?? "pending")} />
                       </TableCell>
                     </TableRow>
                   ))}
@@ -295,15 +544,17 @@ function AccountDetails() {
                   </TableRow>
                 </TableHeader>
                 <TableBody>
-                  {COPIERS.map((c) => (
-                    <TableRow key={c.id}>
-                      <TableCell className="num text-xs">{c.account}</TableCell>
-                      <TableCell>{c.broker}</TableCell>
-                      <TableCell className="text-xs text-muted-foreground">{c.sizing}</TableCell>
+                  {(followersQuery.data ?? []).map((c) => (
+                    <TableRow key={c.follower_account_id}>
+                      <TableCell className="num text-xs">{c.follower_account_id.slice(0, 8)}</TableCell>
+                      <TableCell>{c.broker ?? "—"}</TableCell>
+                      <TableCell className="text-xs text-muted-foreground">
+                        {c.sizing_mode ?? "—"} {c.sizing_value ?? ""}
+                      </TableCell>
                       <TableCell className="num text-xs text-muted-foreground">{fmtDate(c.since)}</TableCell>
-                      <TableCell className="num text-right">{fmtMoney(c.equity)}</TableCell>
+                      <TableCell className="num text-right">{fmtMoney(c.equity ?? 0)}</TableCell>
                       <TableCell className="text-right">
-                        <StatusDot status={c.status} />
+                        <StatusDot status={c.status ?? "unknown"} />
                       </TableCell>
                     </TableRow>
                   ))}
@@ -318,7 +569,9 @@ function AccountDetails() {
             <div className="grid gap-6 lg:grid-cols-2">
               <div className="panel p-6">
                 <h3 className="font-display font-semibold">Wallet</h3>
-                <div className="num mt-4 text-4xl font-bold">{fmtMoney(WALLET.balance)}</div>
+                <div className="num mt-4 text-4xl font-bold">
+                  {fmtMoney(num((walletQuery.data as Record<string, unknown> | undefined)?.balance))}
+                </div>
                 <p className="mt-2 text-sm text-muted-foreground">
                   Fees are debited from your wallet — never from your broker account.
                 </p>
@@ -332,25 +585,10 @@ function AccountDetails() {
                 </div>
               </div>
               <div className="panel p-6">
-                <h3 className="font-display font-semibold">Subscription</h3>
-                <div className="mt-4 flex items-center gap-2">
-                  <Badge>{WALLET.plan}</Badge>
-                  <StatusDot status={WALLET.status} />
-                </div>
-                <dl className="mt-5 space-y-2.5 text-sm">
-                  <div className="flex justify-between">
-                    <dt className="text-muted-foreground">Monthly cost</dt>
-                    <dd className="num">{fmtMoney(WALLET.planPrice)}</dd>
-                  </div>
-                  <div className="flex justify-between">
-                    <dt className="text-muted-foreground">Renews</dt>
-                    <dd className="num">{fmtDate(WALLET.renews)}</dd>
-                  </div>
-                  <div className="flex justify-between">
-                    <dt className="text-muted-foreground">Payment method</dt>
-                    <dd className="num">Card ****4242</dd>
-                  </div>
-                </dl>
+                <h3 className="font-display font-semibold">Billing</h3>
+                <p className="mt-4 text-sm text-muted-foreground">
+                  Manage your subscription package and payment history from the wallet page.
+                </p>
               </div>
             </div>
           </TabsContent>
@@ -364,19 +602,19 @@ function AccountDetails() {
                   <TableRow>
                     <TableHead>Reference</TableHead>
                     <TableHead>Date</TableHead>
-                    <TableHead>Master</TableHead>
                     <TableHead>Type</TableHead>
                     <TableHead className="text-right">Amount</TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
-                  {SPEND_HISTORY.map((s) => (
-                    <TableRow key={s.id}>
-                      <TableCell className="num text-xs">{s.id}</TableCell>
-                      <TableCell className="num text-xs text-muted-foreground">{fmtDate(s.date)}</TableCell>
-                      <TableCell>{s.master}</TableCell>
-                      <TableCell className="text-muted-foreground">{s.type}</TableCell>
-                      <TableCell className="num text-right">{fmtMoney(s.amount)}</TableCell>
+                  {(walletTxQuery.data ?? []).map((s, i) => (
+                    <TableRow key={String(s.id ?? i)}>
+                      <TableCell className="num text-xs">{String(s.id ?? i)}</TableCell>
+                      <TableCell className="num text-xs text-muted-foreground">
+                        {fmtDate(s.created_at as string | undefined)}
+                      </TableCell>
+                      <TableCell className="text-muted-foreground">{String(s.type ?? "—")}</TableCell>
+                      <TableCell className="num text-right">{fmtMoney(num(s.amount))}</TableCell>
                     </TableRow>
                   ))}
                 </TableBody>
@@ -400,16 +638,18 @@ function AccountDetails() {
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {trades.map((t) => (
-                  <TableRow key={t.id}>
-                    <TableCell className="num text-xs text-muted-foreground">{t.id}</TableCell>
+                {closed.map((t) => (
+                  <TableRow key={String(t.deal_ticket)}>
+                    <TableCell className="num text-xs text-muted-foreground">{t.deal_ticket}</TableCell>
                     <TableCell className="num font-medium">{t.symbol}</TableCell>
-                    <TableCell className={t.side === "BUY" ? "text-long" : "text-short"}>{t.side}</TableCell>
-                    <TableCell className="num text-right">{t.lots.toFixed(2)}</TableCell>
-                    <TableCell className="num text-xs text-muted-foreground">{fmtTime(t.open)}</TableCell>
-                    <TableCell className="num text-xs text-muted-foreground">{t.close ? fmtTime(t.close) : "—"}</TableCell>
+                    <TableCell className={dealSide(t) === "BUY" ? "text-long" : "text-short"}>
+                      {dealSide(t)}
+                    </TableCell>
+                    <TableCell className="num text-right">{(t.lots ?? 0).toFixed(2)}</TableCell>
+                    <TableCell className="num text-xs text-muted-foreground">{fmtTime(t.deal_time)}</TableCell>
+                    <TableCell className="num text-xs text-muted-foreground">—</TableCell>
                     <TableCell className="text-right">
-                      <PnL value={t.pnl} className="text-sm" />
+                      <PnL value={num(t.pnl)} className="text-sm" />
                     </TableCell>
                   </TableRow>
                 ))}

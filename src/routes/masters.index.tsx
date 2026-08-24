@@ -14,7 +14,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { MASTERS, fmtMoney } from "@/lib/mock";
+import { useMastersDirectory, useMastersStats } from "@/hooks/use-copydesk";
 
 export const Route = createFileRoute("/masters/")({
   head: () => ({
@@ -23,12 +23,12 @@ export const Route = createFileRoute("/masters/")({
       {
         name: "description",
         content:
-          "Browse every master available to copy with live net P&L, max drawdown, open exposure, win rate, follower count and trading platform.",
+          "Browse every master available to copy with live net P&L, max drawdown, win rate and trade count computed from executed fills.",
       },
       { property: "og:title", content: "Masters directory — verified strategies | CopyDesk" },
       {
         property: "og:description",
-        content: "Compare verified master traders on P&L, drawdown, exposure and win rate.",
+        content: "Compare verified master traders on P&L, drawdown and win rate.",
       },
     ],
   }),
@@ -38,23 +38,34 @@ export const Route = createFileRoute("/masters/")({
 function Directory() {
   const [q, setQ] = useState("");
   const [platform, setPlatform] = useState("all");
-  const [sort, setSort] = useState("return30d");
+  const [sort, setSort] = useState("roi");
+
+  const { data: masters = [] } = useMastersDirectory();
+  const accountIds = useMemo(() => masters.map((m) => m.account_id), [masters]);
+  const statsMap = useMastersStats(accountIds);
 
   const list = useMemo(() => {
-    return MASTERS.filter((m) => m.visible && m.approved)
-      .filter((m) => (platform === "all" ? true : m.platform === platform))
-      .filter(
-        (m) =>
-          m.name.toLowerCase().includes(q.toLowerCase()) ||
-          m.strategy.toLowerCase().includes(q.toLowerCase()),
-      )
+    const enriched = masters.map((m) => ({
+      master: m,
+      ...(statsMap.get(m.account_id) ?? { stats: null, trades: [], isLoading: true, isError: false }),
+    }));
+    const needle = q.toLowerCase();
+    return enriched
+      .filter(({ master: m }) => (platform === "all" ? true : m.platform === platform))
+      .filter(({ master: m }) => {
+        if (!needle) return true;
+        return (
+          (m.display_name ?? "").toLowerCase().includes(needle) ||
+          (m.bio ?? "").toLowerCase().includes(needle)
+        );
+      })
       .sort((a, b) => {
-        if (sort === "drawdown") return a.maxDrawdown - b.maxDrawdown;
-        if (sort === "followers") return b.followers - a.followers;
-        if (sort === "pnl") return b.netPnl - a.netPnl;
-        return b.return30d - a.return30d;
+        if (sort === "drawdown") return (a.stats?.maxDrawdownPct ?? Infinity) - (b.stats?.maxDrawdownPct ?? Infinity);
+        if (sort === "winrate") return (b.stats?.winRate ?? -Infinity) - (a.stats?.winRate ?? -Infinity);
+        if (sort === "pnl") return (b.stats?.netPnl ?? -Infinity) - (a.stats?.netPnl ?? -Infinity);
+        return (b.stats?.roiPct ?? -Infinity) - (a.stats?.roiPct ?? -Infinity);
       });
-  }, [q, platform, sort]);
+  }, [masters, statsMap, platform, q, sort]);
 
   return (
     <AppShell title="Masters directory" subtitle={`${list.length} strategies accepting copiers`}>
@@ -64,7 +75,7 @@ function Directory() {
           <Input
             value={q}
             onChange={(e) => setQ(e.target.value)}
-            placeholder="Search name or strategy…"
+            placeholder="Search name or bio…"
             className="pl-9"
           />
         </div>
@@ -83,56 +94,61 @@ function Directory() {
             <SelectValue />
           </SelectTrigger>
           <SelectContent>
-            <SelectItem value="return30d">Sort: 30-day return</SelectItem>
+            <SelectItem value="roi">Sort: ROI</SelectItem>
             <SelectItem value="pnl">Sort: net P&L</SelectItem>
             <SelectItem value="drawdown">Sort: lowest drawdown</SelectItem>
-            <SelectItem value="followers">Sort: most followers</SelectItem>
+            <SelectItem value="winrate">Sort: win rate</SelectItem>
           </SelectContent>
         </Select>
       </div>
 
       <div className="mt-6 grid gap-4 md:grid-cols-2 xl:grid-cols-3">
-        {list.map((m) => (
-          <div key={m.id} className="panel flex flex-col p-5">
+        {list.map(({ master: m, stats, isLoading }) => (
+          <div key={m.account_id} className="panel flex flex-col p-5">
             <div className="flex items-start gap-3">
-              <Avatar name={m.name} />
+              <Avatar name={m.display_name ?? "Master"} />
               <div className="min-w-0 flex-1">
                 <div className="flex items-center gap-2">
-                  <span className="truncate font-semibold">{m.name}</span>
-                  {m.featured && <Badge className="text-[10px]">Featured</Badge>}
+                  <span className="truncate font-semibold">{m.display_name ?? "Unnamed master"}</span>
                 </div>
-                <div className="truncate text-xs text-muted-foreground">{m.strategy}</div>
+                <div className="truncate text-xs text-muted-foreground">{m.bio || "No bio provided"}</div>
               </div>
               <Badge variant="outline" className="shrink-0 text-[10px]">
-                {m.platform}
+                {m.platform ?? "—"}
               </Badge>
             </div>
 
             <div className="mt-4 h-16">
-              <ResponsiveContainer width="100%" height="100%">
-                <AreaChart data={m.equityCurve.slice(-45)}>
-                  <defs>
-                    <linearGradient id={`d-${m.id}`} x1="0" y1="0" x2="0" y2="1">
-                      <stop offset="0%" stopColor="var(--brand)" stopOpacity={0.35} />
-                      <stop offset="100%" stopColor="var(--brand)" stopOpacity={0} />
-                    </linearGradient>
-                  </defs>
-                  <Area type="monotone" dataKey="v" stroke="var(--brand)" strokeWidth={1.6} fill={`url(#d-${m.id})`} />
-                </AreaChart>
-              </ResponsiveContainer>
+              {stats && stats.curve.length > 0 ? (
+                <ResponsiveContainer width="100%" height="100%">
+                  <AreaChart data={stats.curve}>
+                    <defs>
+                      <linearGradient id={`d-${m.account_id}`} x1="0" y1="0" x2="0" y2="1">
+                        <stop offset="0%" stopColor="var(--brand)" stopOpacity={0.35} />
+                        <stop offset="100%" stopColor="var(--brand)" stopOpacity={0} />
+                      </linearGradient>
+                    </defs>
+                    <Area type="monotone" dataKey="equity" stroke="var(--brand)" strokeWidth={1.6} fill={`url(#d-${m.account_id})`} />
+                  </AreaChart>
+                </ResponsiveContainer>
+              ) : (
+                <div className="grid h-full place-items-center text-xs text-muted-foreground">
+                  {isLoading ? "Loading…" : "No trade history yet"}
+                </div>
+              )}
             </div>
 
             <dl className="mt-4 grid grid-cols-2 gap-y-3 border-t border-border pt-4 text-sm">
-              <Row label="Net P&L" value={<PnL value={m.netPnl} digits={0} className="text-sm" />} />
-              <Row label="Max drawdown" value={<span className="num text-warn">{m.maxDrawdown}%</span>} />
-              <Row label="Open exposure" value={<span className="num">{m.openExposure} lots</span>} />
-              <Row label="Win rate" value={<span className="num">{m.winRate}%</span>} />
-              <Row label="Followers" value={<span className="num">{m.followers.toLocaleString()}</span>} />
-              <Row label="AUM copied" value={<span className="num">{fmtMoney(m.aum)}</span>} />
+              <Row label="Net P&L" value={stats ? <PnL value={stats.netPnl} digits={0} className="text-sm" /> : <span className="text-muted-foreground">—</span>} />
+              <Row label="Max drawdown" value={<span className="num text-warn">{stats ? `${stats.maxDrawdownPct}%` : "—"}</span>} />
+              <Row label="Win rate" value={<span className="num">{stats ? `${stats.winRate}%` : "—"}</span>} />
+              <Row label="Trades" value={<span className="num">{stats ? stats.closedTrades.toLocaleString() : "—"}</span>} />
+              <Row label="Broker" value={<span className="num">{m.broker ?? "—"}</span>} />
+              <Row label="Country" value={<span className="num">{m.country ?? "—"}</span>} />
             </dl>
 
             <Button asChild className="mt-5" variant="outline">
-              <Link to="/masters/$masterId" params={{ masterId: m.id }}>
+              <Link to="/masters/$masterId" params={{ masterId: m.account_id }}>
                 View profile
               </Link>
             </Button>

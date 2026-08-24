@@ -1,3 +1,4 @@
+import { useMemo } from "react";
 import { createFileRoute, Link } from "@tanstack/react-router";
 import {
   Activity,
@@ -5,7 +6,6 @@ import {
   CheckCircle2,
   Gauge,
   LineChart,
-  Link2,
   Scale,
   ShieldCheck,
   Zap,
@@ -15,14 +15,10 @@ import { MarketingFooter, MarketingNav } from "@/components/marketing";
 import { Avatar, PnL, SectionTitle } from "@/components/brand";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
-import {
-  MASTERS,
-  PLANS,
-  PLATFORM_STATS,
-  SYMBOLS,
-  fmtMoney,
-  fmtPct,
-} from "@/lib/mock";
+import { useMastersDirectory, useMastersStats, usePackages } from "@/hooks/use-copydesk";
+import { packageName, packagePrice } from "@/lib/supabase";
+import { fmtMoney } from "@/lib/format";
+import { bySymbol } from "@/lib/trades";
 
 export const Route = createFileRoute("/")({
   head: () => ({
@@ -44,9 +40,33 @@ export const Route = createFileRoute("/")({
   component: Landing,
 });
 
-const top = [...MASTERS].filter((m) => m.visible).sort((a, b) => b.return30d - a.return30d).slice(0, 3);
-
 function Landing() {
+  const { data: masters = [] } = useMastersDirectory();
+  const { data: packages = [] } = usePackages();
+
+  const accountIds = useMemo(() => masters.map((m) => m.account_id), [masters]);
+  const statsMap = useMastersStats(accountIds);
+
+  const ranked = useMemo(() => {
+    return masters
+      .map((m) => ({
+        master: m,
+        ...(statsMap.get(m.account_id) ?? { stats: null, trades: [], isLoading: true, isError: false }),
+      }))
+      .sort((a, b) => (b.stats?.roiPct ?? -Infinity) - (a.stats?.roiPct ?? -Infinity));
+  }, [masters, statsMap]);
+
+  const top = ranked.slice(0, 3);
+
+  const symbols = useMemo(() => {
+    const allTrades = top.flatMap((t) => t.trades ?? []);
+    return bySymbol(allTrades)
+      .slice(0, 12)
+      .map((s) => s.symbol);
+  }, [top]);
+
+  const totalClosedTrades = top.reduce((sum, t) => sum + (t.stats?.closedTrades ?? 0), 0);
+
   return (
     <div className="min-h-screen">
       <MarketingNav />
@@ -61,7 +81,7 @@ function Landing() {
         <div className="relative mx-auto max-w-7xl px-5 pb-16 pt-20 sm:pt-28">
           <div className="inline-flex items-center gap-2 rounded-full border border-border bg-surface px-3 py-1 text-xs text-muted-foreground">
             <span className="live-dot h-1.5 w-1.5 rounded-full bg-long" />
-            Relay live · {PLATFORM_STATS.copiedToday.toLocaleString()} trades mirrored today
+            Relay live · {masters.length} verified masters onboard
           </div>
           <h1 className="mt-6 max-w-4xl text-5xl font-bold leading-[1.03] sm:text-6xl lg:text-7xl">
             Their fill.{" "}
@@ -87,28 +107,20 @@ function Landing() {
 
           <div className="mt-14 grid gap-px overflow-hidden rounded-xl border border-border bg-border sm:grid-cols-2 lg:grid-cols-4">
             {[
-              { label: "Median relay latency", value: `${PLATFORM_STATS.latencyMs} ms`, icon: Zap },
-              {
-                label: "Follower P&L, open signals",
-                value: fmtMoney(PLATFORM_STATS.openSignalPnl),
-                icon: Activity,
-                good: true,
-              },
-              { label: "Verified masters", value: PLATFORM_STATS.masters.toString(), icon: ShieldCheck },
-              {
-                label: "Live connected accounts",
-                value: PLATFORM_STATS.liveAccounts.toLocaleString(),
-                icon: Link2,
-              },
+              { label: "Verified masters", value: masters.length.toString(), icon: ShieldCheck },
+              ...(totalClosedTrades > 0
+                ? [
+                    {
+                      label: "Closed trades from featured masters",
+                      value: totalClosedTrades.toLocaleString(),
+                      icon: Activity,
+                    },
+                  ]
+                : []),
             ].map((s) => (
               <div key={s.label} className="bg-surface p-5">
                 <s.icon className="h-4 w-4 text-primary" />
-                <div
-                  className={`num mt-3 text-2xl font-semibold ${s.good ? "text-long" : ""}`}
-                >
-                  {s.good ? "+" : ""}
-                  {s.value}
-                </div>
+                <div className="num mt-3 text-2xl font-semibold">{s.value}</div>
                 <div className="mt-1 text-xs text-muted-foreground">{s.label}</div>
               </div>
             ))}
@@ -116,19 +128,17 @@ function Landing() {
         </div>
 
         {/* ticker */}
-        <div className="relative flex overflow-hidden border-t border-border bg-surface/60 py-2.5">
-          <div className="ticker-track flex shrink-0 gap-8 whitespace-nowrap px-4">
-            {[...SYMBOLS, ...SYMBOLS].map((s, i) => {
-              const v = ((i * 37) % 90) / 10 - 4;
-              return (
-                <span key={s + i} className="num flex items-center gap-2 text-xs">
-                  <span className="text-muted-foreground">{s}</span>
-                  <span className={v >= 0 ? "text-long" : "text-short"}>{fmtPct(v, 2)}</span>
+        {symbols.length > 0 && (
+          <div className="relative flex overflow-hidden border-t border-border bg-surface/60 py-2.5">
+            <div className="ticker-track flex shrink-0 gap-8 whitespace-nowrap px-4">
+              {[...symbols, ...symbols].map((s, i) => (
+                <span key={s + i} className="num flex items-center gap-2 text-xs text-muted-foreground">
+                  {s}
                 </span>
-              );
-            })}
+              ))}
+            </div>
           </div>
-        </div>
+        )}
       </section>
 
       {/* Brokers */}
@@ -228,7 +238,6 @@ function Landing() {
             {[
               ["Your capital stays at your broker", "CopyDesk never has withdrawal rights."],
               ["Drawdown circuit breaker", "Auto-pause copying at a loss threshold you set."],
-              [`${PLATFORM_STATS.uptime}% relay uptime`, "Rolling 90-day, published monthly."],
             ].map(([t, d]) => (
               <div key={t} className="flex gap-3 rounded-lg border border-border bg-surface p-4">
                 <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0 text-primary" />
@@ -249,64 +258,79 @@ function Landing() {
             <SectionTitle
               eyebrow="Live track records"
               title="Top-performing masters right now"
-              sub="Ranked on 30-day return from verified fills. Drawdown shown alongside — always."
+              sub="Ranked on ROI from verified fills. Drawdown shown alongside — always."
             />
             <Button asChild variant="outline">
               <Link to="/leaderboard">Full leaderboard</Link>
             </Button>
           </div>
           <div className="mt-12 grid gap-6 lg:grid-cols-3">
-            {top.map((m) => (
+            {top.map(({ master: m, stats }) => (
               <Link
-                key={m.id}
+                key={m.account_id}
                 to="/masters/$masterId"
-                params={{ masterId: m.id }}
+                params={{ masterId: m.account_id }}
                 className="panel group p-6 transition-all hover:border-primary/50"
                 style={{ transitionProperty: "border-color, box-shadow" }}
               >
                 <div className="flex items-center gap-3">
-                  <Avatar name={m.name} />
+                  <Avatar name={m.display_name ?? "Master"} />
                   <div className="min-w-0">
-                    <div className="truncate font-semibold">{m.name}</div>
+                    <div className="truncate font-semibold">{m.display_name ?? "Unnamed master"}</div>
                     <div className="truncate text-xs text-muted-foreground">
-                      {m.handle} · {m.platform}
+                      {m.platform ?? "—"}
+                      {m.broker ? ` · ${m.broker}` : ""}
                     </div>
                   </div>
                   <Badge variant="outline" className="ml-auto shrink-0 text-[10px]">
-                    {m.verifiedMonths}mo verified
+                    {stats ? `${stats.trackRecordMonths}mo track record` : "—"}
                   </Badge>
                 </div>
                 <div className="mt-5 h-20">
-                  <ResponsiveContainer width="100%" height="100%">
-                    <AreaChart data={m.equityCurve.slice(-60)}>
-                      <defs>
-                        <linearGradient id={`g-${m.id}`} x1="0" y1="0" x2="0" y2="1">
-                          <stop offset="0%" stopColor="var(--brand)" stopOpacity={0.4} />
-                          <stop offset="100%" stopColor="var(--brand)" stopOpacity={0} />
-                        </linearGradient>
-                      </defs>
-                      <Area
-                        type="monotone"
-                        dataKey="v"
-                        stroke="var(--brand)"
-                        strokeWidth={1.8}
-                        fill={`url(#g-${m.id})`}
-                      />
-                    </AreaChart>
-                  </ResponsiveContainer>
+                  {stats && stats.curve.length > 0 ? (
+                    <ResponsiveContainer width="100%" height="100%">
+                      <AreaChart data={stats.curve}>
+                        <defs>
+                          <linearGradient id={`g-${m.account_id}`} x1="0" y1="0" x2="0" y2="1">
+                            <stop offset="0%" stopColor="var(--brand)" stopOpacity={0.4} />
+                            <stop offset="100%" stopColor="var(--brand)" stopOpacity={0} />
+                          </linearGradient>
+                        </defs>
+                        <Area
+                          type="monotone"
+                          dataKey="equity"
+                          stroke="var(--brand)"
+                          strokeWidth={1.8}
+                          fill={`url(#g-${m.account_id})`}
+                        />
+                      </AreaChart>
+                    </ResponsiveContainer>
+                  ) : (
+                    <div className="grid h-full place-items-center text-xs text-muted-foreground">
+                      No trade history yet
+                    </div>
+                  )}
                 </div>
                 <div className="mt-4 grid grid-cols-3 gap-3 border-t border-border pt-4 text-center">
                   <div>
-                    <div className="text-[10px] uppercase tracking-wider text-muted-foreground">30d</div>
-                    <PnL value={m.return30d} prefix="" suffix="%" digits={1} className="text-sm" />
+                    <div className="text-[10px] uppercase tracking-wider text-muted-foreground">ROI</div>
+                    {stats ? (
+                      <PnL value={stats.roiPct} prefix="" suffix="%" digits={1} className="text-sm" />
+                    ) : (
+                      <div className="num text-sm text-muted-foreground">—</div>
+                    )}
                   </div>
                   <div>
                     <div className="text-[10px] uppercase tracking-wider text-muted-foreground">Max DD</div>
-                    <div className="num text-sm font-medium text-warn">{m.maxDrawdown}%</div>
+                    <div className="num text-sm font-medium text-warn">
+                      {stats ? `${stats.maxDrawdownPct}%` : "—"}
+                    </div>
                   </div>
                   <div>
-                    <div className="text-[10px] uppercase tracking-wider text-muted-foreground">Copiers</div>
-                    <div className="num text-sm font-medium">{m.followers.toLocaleString()}</div>
+                    <div className="text-[10px] uppercase tracking-wider text-muted-foreground">Trades</div>
+                    <div className="num text-sm font-medium">
+                      {stats ? stats.closedTrades.toLocaleString() : "—"}
+                    </div>
                   </div>
                 </div>
               </Link>
@@ -324,31 +348,31 @@ function Landing() {
             sub="No spread markup, no hidden per-lot commission from us. What your broker charges is between you and your broker."
           />
           <div className="mt-12 grid gap-6 lg:grid-cols-3">
-            {PLANS.map((p) => (
-              <div
-                key={p.id}
-                className={`panel flex flex-col p-7 ${p.highlight ? "ring-1 ring-primary/60" : ""}`}
-                style={p.highlight ? { boxShadow: "var(--shadow-lift)" } : undefined}
-              >
-                {p.highlight && (
-                  <Badge className="mb-4 w-fit">Most popular</Badge>
-                )}
-                <div className="font-display text-lg font-semibold">{p.name}</div>
+            {packages.map((p) => (
+              <div key={p.code} className="panel flex flex-col p-7">
+                <div className="font-display text-lg font-semibold">{packageName(p)}</div>
                 <div className="num mt-3 text-4xl font-bold">
-                  ${p.price}
+                  {fmtMoney(packagePrice(p))}
                   <span className="text-sm font-normal text-muted-foreground">/mo</span>
                 </div>
-                <p className="mt-2 text-sm text-muted-foreground">{p.tagline}</p>
+                <p className="mt-2 text-sm text-muted-foreground">
+                  {p.base_roster_size} roster slot{p.base_roster_size === 1 ? "" : "s"} included · billed
+                  every {p.duration_days} days
+                </p>
                 <ul className="mt-6 flex-1 space-y-2.5 text-sm">
-                  {p.features.map((f) => (
+                  {[
+                    `${p.base_roster_size} master slots in your roster`,
+                    `${fmtMoney(Number(p.slot_fee_per_slot))} per additional roster slot`,
+                    `${p.duration_days}-day billing cycle`,
+                  ].map((f) => (
                     <li key={f} className="flex gap-2.5">
                       <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0 text-primary" />
                       <span className="text-muted-foreground">{f}</span>
                     </li>
                   ))}
                 </ul>
-                <Button asChild className="mt-7" variant={p.highlight ? "default" : "outline"}>
-                  <Link to="/pricing">{p.cta}</Link>
+                <Button asChild className="mt-7" variant="outline">
+                  <Link to="/pricing">View plan</Link>
                 </Button>
               </div>
             ))}
