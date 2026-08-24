@@ -1,14 +1,16 @@
 import { createFileRoute } from "@tanstack/react-router";
-import { useState } from "react";
-import { Check, Eye, EyeOff, Star, X } from "lucide-react";
+import { useMemo, useState } from "react";
+import { Check, X } from "lucide-react";
 import { toast } from "sonner";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { AppShell } from "@/components/app-shell";
-import { Avatar, PnL, Stat, StatusDot } from "@/components/brand";
+import { Stat, StatusDot } from "@/components/brand";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
+import { Textarea } from "@/components/ui/textarea";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import {
   Table,
@@ -18,15 +20,9 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
-import {
-  ADMIN_KPIS,
-  ADMIN_PAYOUTS,
-  ADMIN_USERS,
-  CHALLENGES,
-  MASTERS,
-  fmtDate,
-  fmtMoney,
-} from "@/lib/mock";
+import { ApiError, endpoints } from "@/lib/api";
+import { supabase, type ChallengeRow } from "@/lib/supabase";
+import { fmtDate, fmtMoney } from "@/lib/format";
 
 export const Route = createFileRoute("/admin")({
   head: () => ({
@@ -47,41 +43,148 @@ export const Route = createFileRoute("/admin")({
   component: Admin,
 });
 
+function num(v: unknown): number {
+  const n = Number(v);
+  return Number.isFinite(n) ? n : 0;
+}
+
+const EMPTY_CHALLENGE_FORM: Omit<ChallengeRow, "id" | "created_at"> = {
+  name: "",
+  description: "",
+  is_fixed: false,
+  fee: 0,
+  account_size_label: "",
+  profit_target_pct: 8,
+  max_daily_loss_pct: 5,
+  max_drawdown_pct: 10,
+  min_days: 5,
+  reward_amount: 0,
+  reward_text: "",
+  active: true,
+};
+
 function Admin() {
-  const [payouts, setPayouts] = useState(
-    ADMIN_PAYOUTS.map((p) => ({ ...p, status: p.status as "pending" | "approved" | "rejected" })),
-  );
-  const [dir, setDir] = useState(
-    MASTERS.slice(0, 8).map((m, i) => ({
-      id: m.id,
-      name: m.name,
-      platform: m.platform,
-      pnl: m.return30d,
-      followers: m.followers,
-      approved: i !== 6,
-      featured: i < 2,
-      hidden: i === 7,
-    })),
+  const queryClient = useQueryClient();
+
+  const summaryQuery = useQuery({ queryKey: ["admin-summary"], queryFn: endpoints.adminSummary });
+  const topMastersQuery = useQuery({ queryKey: ["admin-top-masters"], queryFn: endpoints.adminTopMasters });
+  const usersQuery = useQuery({ queryKey: ["admin-users"], queryFn: endpoints.adminUsers });
+  const payoutsQuery = useQuery({ queryKey: ["admin-payouts"], queryFn: endpoints.adminPayouts });
+  const mastersQuery = useQuery({ queryKey: ["admin-masters"], queryFn: endpoints.adminMasters });
+  const challengesQuery = useQuery({
+    queryKey: ["admin-challenges"],
+    queryFn: async (): Promise<ChallengeRow[]> => {
+      const { data, error } = await supabase
+        .from("challenges")
+        .select("*")
+        .order("created_at", { ascending: true });
+      if (error) throw error;
+      return (data ?? []) as ChallengeRow[];
+    },
+  });
+
+  const [form, setForm] = useState(EMPTY_CHALLENGE_FORM);
+
+  const fixedChallenge = useMemo(
+    () => (challengesQuery.data ?? []).find((c) => c.is_fixed) ?? null,
+    [challengesQuery.data],
   );
 
-  const decide = (id: string, status: "approved" | "rejected") => {
-    setPayouts((prev) => prev.map((p) => (p.id === id ? { ...p, status } : p)));
-    toast.success(`Payout ${id} ${status}`);
+  const decide = async (id: string, action: "approve" | "reject") => {
+    try {
+      if (action === "approve") await endpoints.adminApprovePayout(id);
+      else await endpoints.adminRejectPayout(id);
+      toast.success(`Payout ${action}d`);
+      queryClient.invalidateQueries({ queryKey: ["admin-payouts"] });
+    } catch (e) {
+      toast.error(e instanceof ApiError ? e.message : "Could not update payout");
+    }
   };
 
-  const pending = payouts.filter((p) => p.status === "pending");
+  const toggleUserAction = (email: string, status: string) => {
+    toast.message(`No suspend endpoint yet — ${email} is ${status}`);
+  };
+
+  const setMasterPublic = async (id: string, isPublic: boolean) => {
+    try {
+      await endpoints.adminSetMasterPublic(id, isPublic);
+      toast.success(isPublic ? "Master made public" : "Master hidden from directory");
+      queryClient.invalidateQueries({ queryKey: ["admin-masters"] });
+    } catch (e) {
+      toast.error(e instanceof ApiError ? e.message : "Could not update visibility");
+    }
+  };
+
+  const createChallenge = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (form.is_fixed && fixedChallenge) {
+      toast.message(`Saving will unset "mandatory first" on ${fixedChallenge.name}`);
+    }
+    try {
+      if (form.is_fixed && fixedChallenge) {
+        await supabase.from("challenges").update({ is_fixed: false }).eq("id", fixedChallenge.id);
+      }
+      const { error } = await supabase.from("challenges").insert(form);
+      if (error) throw error;
+      toast.success("Challenge program created");
+      setForm(EMPTY_CHALLENGE_FORM);
+      queryClient.invalidateQueries({ queryKey: ["admin-challenges"] });
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Could not create challenge");
+    }
+  };
+
+  const toggleChallengeActive = async (c: ChallengeRow) => {
+    try {
+      const { error } = await supabase
+        .from("challenges")
+        .update({ active: !c.active })
+        .eq("id", c.id);
+      if (error) throw error;
+      queryClient.invalidateQueries({ queryKey: ["admin-challenges"] });
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Could not update challenge");
+    }
+  };
+
+  const summary = summaryQuery.data as Record<string, unknown> | undefined;
+  const kpis = summary
+    ? [
+        { label: "MRR", value: fmtMoney(num(summary.mrr)) },
+        { label: "Accounts", value: String(num(summary.accounts_total)) },
+        { label: "Masters", value: String(num(summary.masters_count)) },
+        { label: "Followers", value: String(num(summary.followers_count)) },
+        {
+          label: "Payouts pending",
+          value: `${fmtMoney(num(summary.payouts_pending_amount))} · ${num(summary.payouts_pending_count)}`,
+        },
+        { label: "At-risk wallets", value: String(num(summary.at_risk_wallets_count)) },
+        { label: "Copied today", value: String(num(summary.copied_today)) },
+        { label: "Failed copies (24h)", value: String(num(summary.failed_copies_24h)) },
+        { label: "Failed copy rate (24h)", value: `${num(summary.failed_copies_pct_24h).toFixed(1)}%` },
+      ]
+    : [];
+
+  const payouts = (payoutsQuery.data ?? []) as Record<string, unknown>[];
+  const pending = payouts.filter((p) => String(p.status ?? "") === "pending");
 
   return (
     <AppShell
       title="Admin console"
       subtitle="Platform operations — restricted access"
-      actions={<Badge variant="outline">Operator: root@copydesk.io</Badge>}
+      actions={<Badge variant="outline">Operator</Badge>}
     >
-      <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
-        {ADMIN_KPIS.map((k) => (
-          <Stat key={k.label} label={k.label} value={k.value} hint={k.delta} />
-        ))}
-      </div>
+      {summaryQuery.isError ? (
+        <div className="panel p-6 text-sm text-destructive">
+          {summaryQuery.error instanceof ApiError ? summaryQuery.error.message : "Could not load summary."}
+        </div>
+      ) : (
+        <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
+          {kpis.map((k) => (
+            <Stat key={k.label} label={k.label} value={k.value} />
+          ))}
+        </div>
+      )}
 
       <Tabs defaultValue="payouts" className="mt-8">
         <TabsList>
@@ -89,226 +192,282 @@ function Admin() {
           <TabsTrigger value="users">Users</TabsTrigger>
           <TabsTrigger value="challenges">Challenges</TabsTrigger>
           <TabsTrigger value="directory">Directory</TabsTrigger>
+          <TabsTrigger value="analytics">Analytics</TabsTrigger>
         </TabsList>
 
         <TabsContent value="payouts" className="mt-5">
-          <div className="panel overflow-x-auto">
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead>Reference</TableHead>
-                  <TableHead>Master</TableHead>
-                  <TableHead>Amount</TableHead>
-                  <TableHead>Method</TableHead>
-                  <TableHead>Requested</TableHead>
-                  <TableHead>Status</TableHead>
-                  <TableHead className="text-right">Action</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {payouts.map((p) => (
-                  <TableRow key={p.id}>
-                    <TableCell className="num">{p.id}</TableCell>
-                    <TableCell>{p.master}</TableCell>
-                    <TableCell className="num">{fmtMoney(p.amount)}</TableCell>
-                    <TableCell className="text-muted-foreground">{p.method}</TableCell>
-                    <TableCell className="num text-muted-foreground">{fmtDate(p.requested)}</TableCell>
-                    <TableCell>
-                      <StatusDot status={p.status} />
-                    </TableCell>
-                    <TableCell className="text-right">
-                      {p.status === "pending" ? (
-                        <div className="flex justify-end gap-2">
-                          <Button size="sm" onClick={() => decide(p.id, "approved")}>
-                            <Check className="h-3.5 w-3.5" />
-                          </Button>
-                          <Button
-                            size="sm"
-                            variant="outline"
-                            onClick={() => decide(p.id, "rejected")}
-                          >
-                            <X className="h-3.5 w-3.5" />
-                          </Button>
-                        </div>
-                      ) : (
-                        <span className="text-xs text-muted-foreground">Resolved</span>
-                      )}
-                    </TableCell>
+          {payoutsQuery.isError ? (
+            <div className="panel p-6 text-sm text-destructive">
+              {payoutsQuery.error instanceof ApiError ? payoutsQuery.error.message : "Could not load payouts."}
+            </div>
+          ) : (
+            <div className="panel overflow-x-auto">
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead>Reference</TableHead>
+                    <TableHead>Master</TableHead>
+                    <TableHead>Amount</TableHead>
+                    <TableHead>Method</TableHead>
+                    <TableHead>Destination</TableHead>
+                    <TableHead>Requested</TableHead>
+                    <TableHead>Status</TableHead>
+                    <TableHead className="text-right">Action</TableHead>
                   </TableRow>
-                ))}
-              </TableBody>
-            </Table>
-          </div>
+                </TableHeader>
+                <TableBody>
+                  {payouts.map((p, i) => {
+                    const id = String(p.id ?? i);
+                    const status = String(p.status ?? "pending");
+                    return (
+                      <TableRow key={id}>
+                        <TableCell className="num">{id}</TableCell>
+                        <TableCell>{String(p.master_account_id ?? p.master ?? "—")}</TableCell>
+                        <TableCell className="num">{fmtMoney(num(p.amount))}</TableCell>
+                        <TableCell className="text-muted-foreground">{String(p.payout_method ?? "—")}</TableCell>
+                        <TableCell className="num text-xs">{String(p.payout_account_number ?? "—")}</TableCell>
+                        <TableCell className="num text-muted-foreground">{fmtDate(p.created_at as string | undefined)}</TableCell>
+                        <TableCell>
+                          <StatusDot status={status} />
+                        </TableCell>
+                        <TableCell className="text-right">
+                          {status === "pending" ? (
+                            <div className="flex justify-end gap-2">
+                              <Button size="sm" onClick={() => decide(id, "approve")}>
+                                <Check className="h-3.5 w-3.5" />
+                              </Button>
+                              <Button size="sm" variant="outline" onClick={() => decide(id, "reject")}>
+                                <X className="h-3.5 w-3.5" />
+                              </Button>
+                            </div>
+                          ) : (
+                            <span className="text-xs text-muted-foreground">Resolved</span>
+                          )}
+                        </TableCell>
+                      </TableRow>
+                    );
+                  })}
+                </TableBody>
+              </Table>
+            </div>
+          )}
         </TabsContent>
 
         <TabsContent value="users" className="mt-5">
-          <div className="panel overflow-x-auto">
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead>ID</TableHead>
-                  <TableHead>Email</TableHead>
-                  <TableHead>Role</TableHead>
-                  <TableHead>Accounts</TableHead>
-                  <TableHead>Joined</TableHead>
-                  <TableHead>Status</TableHead>
-                  <TableHead className="text-right">Action</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {ADMIN_USERS.map((u) => (
-                  <TableRow key={u.id}>
-                    <TableCell className="num">{u.id}</TableCell>
-                    <TableCell>{u.email}</TableCell>
-                    <TableCell className="capitalize text-muted-foreground">{u.role}</TableCell>
-                    <TableCell className="num">{u.accounts}</TableCell>
-                    <TableCell className="num text-muted-foreground">{fmtDate(u.joined)}</TableCell>
-                    <TableCell>
-                      <StatusDot status={u.status} />
-                    </TableCell>
-                    <TableCell className="text-right">
-                      <Button
-                        size="sm"
-                        variant="outline"
-                        onClick={() =>
-                          toast.success(
-                            u.status === "suspended"
-                              ? `${u.email} reinstated`
-                              : `${u.email} suspended`,
-                          )
-                        }
-                      >
-                        {u.status === "suspended" ? "Reinstate" : "Suspend"}
-                      </Button>
-                    </TableCell>
+          {usersQuery.isError ? (
+            <div className="panel p-6 text-sm text-destructive">
+              {usersQuery.error instanceof ApiError ? usersQuery.error.message : "Could not load users."}
+            </div>
+          ) : (
+            <div className="panel overflow-x-auto">
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead>ID</TableHead>
+                    <TableHead>Email</TableHead>
+                    <TableHead>Role</TableHead>
+                    <TableHead>Accounts</TableHead>
+                    <TableHead>Joined</TableHead>
+                    <TableHead>Status</TableHead>
+                    <TableHead className="text-right">Action</TableHead>
                   </TableRow>
-                ))}
-              </TableBody>
-            </Table>
-          </div>
+                </TableHeader>
+                <TableBody>
+                  {((usersQuery.data ?? []) as Record<string, unknown>[]).map((u, i) => {
+                    const id = String(u.id ?? i);
+                    const email = String(u.email ?? "—");
+                    const status = String(u.status ?? "active");
+                    return (
+                      <TableRow key={id}>
+                        <TableCell className="num">{id}</TableCell>
+                        <TableCell>{email}</TableCell>
+                        <TableCell className="capitalize text-muted-foreground">{String(u.role ?? "—")}</TableCell>
+                        <TableCell className="num">{String(u.accounts ?? "—")}</TableCell>
+                        <TableCell className="num text-muted-foreground">{fmtDate(u.joined as string | undefined)}</TableCell>
+                        <TableCell>
+                          <StatusDot status={status} />
+                        </TableCell>
+                        <TableCell className="text-right">
+                          <Button size="sm" variant="outline" onClick={() => toggleUserAction(email, status)}>
+                            {status === "suspended" ? "Reinstate" : "Suspend"}
+                          </Button>
+                        </TableCell>
+                      </TableRow>
+                    );
+                  })}
+                </TableBody>
+              </Table>
+            </div>
+          )}
         </TabsContent>
 
         <TabsContent value="challenges" className="mt-5">
-          <div className="grid gap-5 lg:grid-cols-[1fr_360px]">
-            <div className="space-y-4">
-              {CHALLENGES.map((c) => (
-                <div key={c.id} className="panel p-5">
-                  <div className="flex flex-wrap items-center gap-3">
-                    <div className="font-display font-semibold">{c.name}</div>
-                    <Badge variant="outline" className="num">
-                      {fmtMoney(c.accountSize)}
-                    </Badge>
-                    <span className="num ml-auto text-sm text-muted-foreground">
-                      Fee {fmtMoney(c.fee)}
-                    </span>
-                    <Switch defaultChecked={c.active} />
+          {challengesQuery.isError ? (
+            <div className="panel p-6 text-sm text-destructive">Could not load challenges.</div>
+          ) : (
+            <div className="grid gap-5 lg:grid-cols-[1fr_360px]">
+              <div className="space-y-4">
+                {(challengesQuery.data ?? []).map((c) => (
+                  <div key={c.id} className="panel p-5">
+                    <div className="flex flex-wrap items-center gap-3">
+                      <div className="font-display font-semibold">{c.name}</div>
+                      {c.account_size_label && (
+                        <Badge variant="outline" className="num">
+                          {c.account_size_label}
+                        </Badge>
+                      )}
+                      {c.is_fixed && <Badge>Mandatory first</Badge>}
+                      <span className="num ml-auto text-sm text-muted-foreground">Fee {fmtMoney(c.fee)}</span>
+                      <Switch checked={c.active} onCheckedChange={() => toggleChallengeActive(c)} />
+                    </div>
+                    <div className="num mt-4 grid grid-cols-2 gap-3 text-sm sm:grid-cols-4">
+                      <Field k="Profit target" v={`${c.profit_target_pct}%`} />
+                      <Field k="Max daily loss" v={`${c.max_daily_loss_pct}%`} />
+                      <Field k="Max drawdown" v={`${c.max_drawdown_pct}%`} />
+                      <Field k="Min days" v={String(c.min_days)} />
+                    </div>
+                    <p className="mt-4 text-xs text-muted-foreground">
+                      Reward: {c.reward_amount ? `${fmtMoney(c.reward_amount)} wallet credit` : "no wallet credit"}
+                      {c.reward_text ? ` + ${c.reward_text} (manually fulfilled)` : ""}
+                    </p>
                   </div>
-                  <div className="num mt-4 grid grid-cols-2 gap-3 text-sm sm:grid-cols-4">
-                    <Field k="Profit target" v={`${c.profitTarget}%`} />
-                    <Field k="Max daily loss" v={`${c.maxDailyLoss}%`} />
-                    <Field k="Max drawdown" v={`${c.maxDrawdown}%`} />
-                    <Field k="Min days" v={String(c.minDays)} />
-                  </div>
-                  <p className="mt-4 text-xs text-muted-foreground">Reward: {c.reward}</p>
-                </div>
-              ))}
-            </div>
+                ))}
+              </div>
 
-            <form
-              className="panel h-fit space-y-4 p-5"
-              onSubmit={(e) => {
-                e.preventDefault();
-                toast.success("Challenge program created");
-              }}
-            >
-              <div className="font-display font-semibold">New program</div>
-              <div className="space-y-1.5">
-                <Label htmlFor="pn">Program name</Label>
-                <Input id="pn" placeholder="Surge 10K" />
-              </div>
-              <div className="grid gap-3 sm:grid-cols-2">
+              <form className="panel h-fit space-y-4 p-5" onSubmit={createChallenge}>
+                <div className="font-display font-semibold">New program</div>
                 <div className="space-y-1.5">
-                  <Label htmlFor="as">Account size</Label>
-                  <Input id="as" className="num" placeholder="10000" />
+                  <Label htmlFor="pn">Program name</Label>
+                  <Input id="pn" value={form.name} onChange={(e) => setForm((f) => ({ ...f, name: e.target.value }))} />
                 </div>
                 <div className="space-y-1.5">
-                  <Label htmlFor="fe">Entry fee</Label>
-                  <Input id="fe" className="num" placeholder="79" />
+                  <Label htmlFor="ds">Description</Label>
+                  <Textarea id="ds" value={form.description ?? ""} onChange={(e) => setForm((f) => ({ ...f, description: e.target.value }))} />
+                </div>
+                <div className="grid gap-3 sm:grid-cols-2">
+                  <div className="space-y-1.5">
+                    <Label htmlFor="as">Account size label</Label>
+                    <Input
+                      id="as"
+                      value={form.account_size_label ?? ""}
+                      onChange={(e) => setForm((f) => ({ ...f, account_size_label: e.target.value }))}
+                      placeholder="e.g. 10K tier"
+                    />
+                  </div>
+                  <div className="space-y-1.5">
+                    <Label htmlFor="fe">Entry fee</Label>
+                    <Input id="fe" className="num" type="number" value={form.fee} onChange={(e) => setForm((f) => ({ ...f, fee: Number(e.target.value) }))} />
+                  </div>
+                  <div className="space-y-1.5">
+                    <Label htmlFor="pt">Profit target %</Label>
+                    <Input id="pt" className="num" type="number" value={form.profit_target_pct} onChange={(e) => setForm((f) => ({ ...f, profit_target_pct: Number(e.target.value) }))} />
+                  </div>
+                  <div className="space-y-1.5">
+                    <Label htmlFor="dl">Max daily loss %</Label>
+                    <Input id="dl" className="num" type="number" value={form.max_daily_loss_pct} onChange={(e) => setForm((f) => ({ ...f, max_daily_loss_pct: Number(e.target.value) }))} />
+                  </div>
+                  <div className="space-y-1.5">
+                    <Label htmlFor="dd">Max drawdown %</Label>
+                    <Input id="dd" className="num" type="number" value={form.max_drawdown_pct} onChange={(e) => setForm((f) => ({ ...f, max_drawdown_pct: Number(e.target.value) }))} />
+                  </div>
+                  <div className="space-y-1.5">
+                    <Label htmlFor="md">Minimum days</Label>
+                    <Input id="md" className="num" type="number" value={form.min_days} onChange={(e) => setForm((f) => ({ ...f, min_days: Number(e.target.value) }))} />
+                  </div>
                 </div>
                 <div className="space-y-1.5">
-                  <Label htmlFor="pt">Profit target %</Label>
-                  <Input id="pt" className="num" placeholder="8" />
+                  <Label htmlFor="ra">Reward amount (wallet credit)</Label>
+                  <Input id="ra" className="num" type="number" value={form.reward_amount ?? 0} onChange={(e) => setForm((f) => ({ ...f, reward_amount: Number(e.target.value) }))} />
                 </div>
                 <div className="space-y-1.5">
-                  <Label htmlFor="dd">Max drawdown %</Label>
-                  <Input id="dd" className="num" placeholder="8" />
+                  <Label htmlFor="rt">Reward perk (manually fulfilled)</Label>
+                  <Input id="rt" value={form.reward_text ?? ""} onChange={(e) => setForm((f) => ({ ...f, reward_text: e.target.value }))} placeholder="e.g. Funded master seat" />
                 </div>
-              </div>
-              <div className="space-y-1.5">
-                <Label htmlFor="rw">Reward</Label>
-                <Input id="rw" placeholder="Funded master seat" />
-              </div>
-              <Button type="submit" className="w-full">
-                Create program
-              </Button>
-            </form>
-          </div>
+                <div className="flex items-center justify-between rounded-md border border-border p-3">
+                  <div>
+                    <Label htmlFor="fixed">Mandatory first challenge</Label>
+                    {fixedChallenge && (
+                      <p className="mt-1 text-xs text-muted-foreground">
+                        Currently held by "{fixedChallenge.name}" — saving here will unset it there.
+                      </p>
+                    )}
+                  </div>
+                  <Switch id="fixed" checked={form.is_fixed} onCheckedChange={(v) => setForm((f) => ({ ...f, is_fixed: v }))} />
+                </div>
+                <Button type="submit" className="w-full">
+                  Create program
+                </Button>
+              </form>
+            </div>
+          )}
         </TabsContent>
 
         <TabsContent value="directory" className="mt-5">
-          <div className="space-y-3">
-            {dir.map((m) => (
-              <div key={m.id} className="panel flex flex-wrap items-center gap-4 p-4">
-                <Avatar name={m.name} size={38} />
-                <div className="min-w-40">
-                  <div className="font-medium">{m.name}</div>
-                  <div className="num text-xs text-muted-foreground">
-                    {m.platform} · {m.followers} followers
+          {mastersQuery.isError ? (
+            <div className="panel p-6 text-sm text-destructive">
+              {mastersQuery.error instanceof ApiError ? mastersQuery.error.message : "Could not load masters."}
+            </div>
+          ) : (
+            <div className="space-y-3">
+              {((mastersQuery.data ?? []) as Record<string, unknown>[]).map((m, i) => {
+                const id = String(m.account_id ?? m.id ?? i);
+                const isPublic = Boolean(m.is_public ?? m.public);
+                return (
+                  <div key={id} className="panel flex flex-wrap items-center gap-4 p-4">
+                    <div className="min-w-40">
+                      <div className="font-medium">{String(m.display_name ?? id)}</div>
+                      <div className="num text-xs text-muted-foreground">
+                        {String(m.platform ?? "—")} · {String(m.followers_count ?? m.followers ?? 0)} followers
+                      </div>
+                    </div>
+                    <div className="ml-auto flex flex-wrap items-center gap-2">
+                      {!isPublic && <Badge variant="outline">Hidden</Badge>}
+                      <Button
+                        size="sm"
+                        variant={isPublic ? "outline" : "default"}
+                        onClick={() => setMasterPublic(id, !isPublic)}
+                      >
+                        {isPublic ? "Hide" : "Make public"}
+                      </Button>
+                    </div>
                   </div>
-                </div>
-                <div className="num text-sm">
-                  <PnL value={m.pnl} suffix="%" />
-                </div>
-                <div className="ml-auto flex flex-wrap items-center gap-2">
-                  {!m.approved && <Badge variant="outline">Awaiting review</Badge>}
-                  {m.featured && <Badge>Featured</Badge>}
-                  {m.hidden && <Badge variant="destructive">Hidden</Badge>}
-                  <Button
-                    size="sm"
-                    variant={m.approved ? "outline" : "default"}
-                    onClick={() => {
-                      setDir((p) =>
-                        p.map((x) => (x.id === m.id ? { ...x, approved: !x.approved } : x)),
-                      );
-                      toast.success(m.approved ? "Approval revoked" : `${m.name} approved`);
-                    }}
-                  >
-                    {m.approved ? "Revoke" : "Approve"}
-                  </Button>
-                  <Button
-                    size="sm"
-                    variant="outline"
-                    onClick={() =>
-                      setDir((p) =>
-                        p.map((x) => (x.id === m.id ? { ...x, featured: !x.featured } : x)),
-                      )
-                    }
-                  >
-                    <Star className="h-3.5 w-3.5" />
-                  </Button>
-                  <Button
-                    size="sm"
-                    variant="outline"
-                    onClick={() =>
-                      setDir((p) => p.map((x) => (x.id === m.id ? { ...x, hidden: !x.hidden } : x)))
-                    }
-                  >
-                    {m.hidden ? <Eye className="h-3.5 w-3.5" /> : <EyeOff className="h-3.5 w-3.5" />}
-                  </Button>
-                </div>
-              </div>
-            ))}
-          </div>
+                );
+              })}
+            </div>
+          )}
+        </TabsContent>
+
+        <TabsContent value="analytics" className="mt-5">
+          {topMastersQuery.isError ? (
+            <div className="panel p-6 text-sm text-destructive">Could not load analytics.</div>
+          ) : (
+            <div className="panel overflow-x-auto">
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead>Master</TableHead>
+                    <TableHead>Followers</TableHead>
+                    <TableHead className="text-right">Net P&L</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {((topMastersQuery.data ?? []) as Record<string, unknown>[]).map((m, i) => (
+                    <TableRow key={String(m.account_id ?? i)}>
+                      <TableCell>{String(m.display_name ?? m.account_id ?? "—")}</TableCell>
+                      <TableCell className="num">{String(m.followers ?? m.followers_count ?? "—")}</TableCell>
+                      <TableCell className="num text-right">
+                        {m.net_pnl == null ? (
+                          <span className="text-muted-foreground">unavailable</span>
+                        ) : (
+                          fmtMoney(num(m.net_pnl))
+                        )}
+                      </TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+            </div>
+          )}
         </TabsContent>
       </Tabs>
     </AppShell>
