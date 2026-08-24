@@ -22,7 +22,9 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
-import { ACCOUNTS, SYMBOLS, allTrades, fmtMoney, fmtTime } from "@/lib/mock";
+import { fmtMoney, fmtTime } from "@/lib/format";
+import { dealSide } from "@/lib/trades";
+import { useMyAccounts, useActiveAccount, useAccountTrades } from "@/hooks/use-copydesk";
 
 export const Route = createFileRoute("/trades")({
   head: () => ({
@@ -43,48 +45,69 @@ export const Route = createFileRoute("/trades")({
   component: Trades,
 });
 
-const ALL = allTrades();
-
 function Trades() {
-  const [account, setAccount] = useState(ACCOUNTS[0]!.id);
+  const { data: accounts = [] } = useMyAccounts();
+  const { accountId, select } = useActiveAccount();
+  const { data: deals = [] } = useAccountTrades(accountId);
+
   const [symbol, setSymbol] = useState("all");
   const [side, setSide] = useState("all");
   const [result, setResult] = useState("all");
   const [q, setQ] = useState("");
 
-  const rows = useMemo(
-    () =>
-      ALL.filter((t) => (symbol === "all" ? true : t.symbol === symbol))
-        .filter((t) => (side === "all" ? true : t.side === side))
-        .filter((t) => (result === "all" ? true : result === "win" ? t.pnl >= 0 : t.pnl < 0))
-        .filter((t) => (q ? t.symbol.toLowerCase().includes(q.toLowerCase()) || t.id.includes(q) : true)),
-    [symbol, side, result, q],
+  const symbols = useMemo(
+    () => Array.from(new Set(deals.map((d) => d.symbol))).sort(),
+    [deals],
   );
 
-  const net = rows.reduce((s, t) => s + t.pnl, 0);
-  const wins = rows.filter((t) => t.pnl >= 0).length;
+  const rows = useMemo(
+    () =>
+      deals
+        .filter((d) => (symbol === "all" ? true : d.symbol === symbol))
+        .filter((d) => (side === "all" ? true : dealSide(d) === side))
+        .filter((d) =>
+          result === "all" ? true : result === "win" ? (Number(d.pnl) || 0) >= 0 : (Number(d.pnl) || 0) < 0,
+        )
+        .filter((d) =>
+          q
+            ? d.symbol.toLowerCase().includes(q.toLowerCase()) ||
+              String(d.deal_ticket).includes(q)
+            : true,
+        )
+        .slice()
+        .sort((a, b) => new Date(b.deal_time).getTime() - new Date(a.deal_time).getTime()),
+    [deals, symbol, side, result, q],
+  );
+
+  const closedRows = rows.filter((d) => d.entry === "out");
+  const net = closedRows.reduce((s, d) => s + (Number(d.pnl) || 0), 0);
+  const wins = closedRows.filter((d) => (Number(d.pnl) || 0) >= 0).length;
 
   return (
-    <AppShell title="Trade history" subtitle={`${rows.length} closed trades matching filters`}>
+    <AppShell title="Trade history" subtitle={`${closedRows.length} closed trades matching filters`}>
       <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
         <Stat label="Net realised P&L" value={<PnL value={net} digits={0} className="text-2xl" />} />
-        <Stat label="Closed trades" value={rows.length.toString()} />
-        <Stat label="Win rate" value={`${rows.length ? ((wins / rows.length) * 100).toFixed(1) : "0.0"}%`} accent />
+        <Stat label="Closed trades" value={closedRows.length.toString()} />
+        <Stat
+          label="Win rate"
+          value={`${closedRows.length ? ((wins / closedRows.length) * 100).toFixed(1) : "0.0"}%`}
+          accent
+        />
         <Stat
           label="Avg trade"
-          value={<PnL value={rows.length ? net / rows.length : 0} className="text-2xl" />}
+          value={<PnL value={closedRows.length ? net / closedRows.length : 0} className="text-2xl" />}
         />
       </div>
 
       <div className="panel mt-6 flex flex-wrap items-center gap-3 p-4">
-        <Select value={account} onValueChange={setAccount}>
+        <Select value={accountId ?? ""} onValueChange={select}>
           <SelectTrigger className="w-60">
             <SelectValue />
           </SelectTrigger>
           <SelectContent>
-            {ACCOUNTS.map((a) => (
-              <SelectItem key={a.id} value={a.id}>
-                {a.label}
+            {accounts.map((a) => (
+              <SelectItem key={a.account_id} value={a.account_id}>
+                {a.mt_login ?? a.account_id}
               </SelectItem>
             ))}
           </SelectContent>
@@ -95,7 +118,7 @@ function Trades() {
           </SelectTrigger>
           <SelectContent>
             <SelectItem value="all">All symbols</SelectItem>
-            {SYMBOLS.map((s) => (
+            {symbols.map((s) => (
               <SelectItem key={s} value={s}>
                 {s}
               </SelectItem>
@@ -141,35 +164,35 @@ function Trades() {
               <TableHead>Symbol</TableHead>
               <TableHead>Side</TableHead>
               <TableHead className="text-right">Lots</TableHead>
-              <TableHead className="text-right">Entry</TableHead>
-              <TableHead className="text-right">Exit</TableHead>
+              <TableHead className="text-right">Price</TableHead>
               <TableHead>Opened</TableHead>
               <TableHead>Closed</TableHead>
-              <TableHead className="text-right">Pips</TableHead>
               <TableHead className="text-right">P&L</TableHead>
             </TableRow>
           </TableHeader>
           <TableBody>
             {rows.map((t) => (
-              <TableRow key={t.id}>
-                <TableCell className="num text-xs text-muted-foreground">{t.id}</TableCell>
+              <TableRow key={String(t.deal_ticket)}>
+                <TableCell className="num text-xs text-muted-foreground">{t.deal_ticket}</TableCell>
                 <TableCell className="num font-medium">{t.symbol}</TableCell>
                 <TableCell>
                   <Badge
                     variant="outline"
-                    className={t.side === "BUY" ? "border-long/40 text-long" : "border-short/40 text-short"}
+                    className={dealSide(t) === "BUY" ? "border-long/40 text-long" : "border-short/40 text-short"}
                   >
-                    {t.side}
+                    {dealSide(t)}
                   </Badge>
                 </TableCell>
-                <TableCell className="num text-right">{t.lots.toFixed(2)}</TableCell>
-                <TableCell className="num text-right">{t.openPrice}</TableCell>
-                <TableCell className="num text-right">{t.closePrice}</TableCell>
-                <TableCell className="num text-xs text-muted-foreground">{fmtTime(t.open)}</TableCell>
-                <TableCell className="num text-xs text-muted-foreground">{t.close ? fmtTime(t.close) : "—"}</TableCell>
-                <TableCell className="num text-right">{t.pips}</TableCell>
+                <TableCell className="num text-right">{Number(t.lots).toFixed(2)}</TableCell>
+                <TableCell className="num text-right">{t.price ?? "—"}</TableCell>
+                <TableCell className="num text-xs text-muted-foreground">
+                  {t.entry === "in" ? fmtTime(t.deal_time) : "—"}
+                </TableCell>
+                <TableCell className="num text-xs text-muted-foreground">
+                  {t.entry === "out" ? fmtTime(t.deal_time) : "—"}
+                </TableCell>
                 <TableCell className="text-right">
-                  <PnL value={t.pnl} className="text-sm" />
+                  <PnL value={Number(t.pnl) || 0} className="text-sm" />
                 </TableCell>
               </TableRow>
             ))}
@@ -181,10 +204,6 @@ function Trades() {
           </div>
         )}
       </div>
-      <p className="mt-4 text-xs text-muted-foreground">
-        Realised totals exclude swap and commission charged by your broker. Account balance{" "}
-        {fmtMoney(ACCOUNTS.find((a) => a.id === account)?.balance ?? 0)}.
-      </p>
     </AppShell>
   );
 }
