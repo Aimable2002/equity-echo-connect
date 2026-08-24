@@ -229,3 +229,11 @@ export function useMastersStats(accountIds: string[]) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [ids, queries.map((q) => q.dataUpdatedAt).join(",")]);
 }
+
+export function useMasterFollowers(accountId: string | null | undefined) {
+  return useQuery({
+    queryKey: ["master-followers", accountId],
+    queryFn: () => endpoints.masterFollowers(accountId!),
+    enabled: !!accountId,
+  });
+}

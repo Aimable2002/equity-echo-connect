@@ -22,7 +22,7 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
-import { fmtMoney, fmtTime } from "@/lib/format";
+import { fmtTime } from "@/lib/format";
 import { dealSide } from "@/lib/trades";
 import { useMyAccounts, useActiveAccount, useAccountTrades } from "@/hooks/use-copydesk";
 
