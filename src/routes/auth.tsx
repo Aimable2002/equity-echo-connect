@@ -1,5 +1,5 @@
 import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { ArrowRight, Lock, Mail, ShieldCheck, User } from "lucide-react";
 import { toast } from "sonner";
 import { Logo } from "@/components/brand";
@@ -7,7 +7,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { supabase } from "@/lib/supabase";
+import { supabase, fetchMyAccounts } from "@/lib/supabase";
 
 export const Route = createFileRoute("/auth")({
   head: () => ({
@@ -31,17 +31,30 @@ export const Route = createFileRoute("/auth")({
 function AuthPage() {
   const navigate = useNavigate();
   const [loading, setLoading] = useState(false);
+  const [checkingSession, setCheckingSession] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [confirmMessage, setConfirmMessage] = useState<string | null>(null);
 
   const routeAfterAuth = async () => {
-    const { data: auth } = await supabase.auth.getUser();
-    if (!auth.user) return navigate({ to: "/auth" });
-    const { data } = await supabase
-      .from("accounts")
-      .select("account_id")
-      .eq("user_id", auth.user.id)
-      .limit(1);
-    navigate({ to: data && data.length ? "/dashboard" : "/onboarding" });
+    const accounts = await fetchMyAccounts();
+    navigate({ to: accounts.length ? "/dashboard" : "/onboarding" });
   };
+
+  useEffect(() => {
+    let mounted = true;
+    supabase.auth.getSession().then(async ({ data }) => {
+      if (!mounted) return;
+      if (data.session) {
+        await routeAfterAuth();
+        return;
+      }
+      setCheckingSession(false);
+    });
+    return () => {
+      mounted = false;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const submit = (kind: "in" | "up") => async (e: React.FormEvent) => {
     e.preventDefault();
@@ -49,32 +62,42 @@ function AuthPage() {
     const fd = new FormData(form);
     const email = String(fd.get("email") ?? "").trim();
     const password = String(fd.get("password") ?? "");
+    setError(null);
+    setConfirmMessage(null);
     if (!email || !password) {
+      setError("Email and password are required");
       toast.error("Email and password are required");
       return;
     }
     setLoading(true);
     try {
       if (kind === "in") {
-        const { error } = await supabase.auth.signInWithPassword({ email, password });
-        if (error) throw error;
+        const { error: signInError } = await supabase.auth.signInWithPassword({ email, password });
+        if (signInError) throw signInError;
         toast.success("Welcome back");
+        await routeAfterAuth();
       } else {
-        const { data, error } = await supabase.auth.signUp({ email, password });
-        if (error) throw error;
+        const { data, error: signUpError } = await supabase.auth.signUp({ email, password });
+        if (signUpError) throw signUpError;
         if (!data.session) {
-          toast.success("Check your inbox to confirm your email, then sign in.");
+          const msg = "Check your email to confirm your account, then sign in.";
+          setConfirmMessage(msg);
+          toast.success(msg);
           return;
         }
         toast.success("Desk created");
+        await routeAfterAuth();
       }
-      await routeAfterAuth();
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Authentication failed");
+      const message = err instanceof Error ? err.message : "Authentication failed";
+      setError(message);
+      toast.error(message);
     } finally {
       setLoading(false);
     }
   };
+
+  if (checkingSession) return null;
 
   return (
     <div className="grid min-h-screen lg:grid-cols-2">
@@ -104,7 +127,14 @@ function AuthPage() {
           <div className="lg:hidden">
             <Logo />
           </div>
-          <Tabs defaultValue="signin" className="mt-8 lg:mt-0">
+          <Tabs
+            defaultValue="signin"
+            className="mt-8 lg:mt-0"
+            onValueChange={() => {
+              setError(null);
+              setConfirmMessage(null);
+            }}
+          >
             <TabsList className="grid w-full grid-cols-2">
               <TabsTrigger value="signin">Sign in</TabsTrigger>
               <TabsTrigger value="signup">Create account</TabsTrigger>
@@ -125,16 +155,17 @@ function AuthPage() {
                     onClick={async () => {
                       const email = window.prompt("Email to send a reset link to?")?.trim();
                       if (!email) return;
-                      const { error } = await supabase.auth.resetPasswordForEmail(email, {
+                      const { error: resetError } = await supabase.auth.resetPasswordForEmail(email, {
                         redirectTo: `${window.location.origin}/settings`,
                       });
-                      if (error) toast.error(error.message);
+                      if (resetError) toast.error(resetError.message);
                       else toast.success("Reset link sent");
                     }}
                   >
                     Forgot password?
                   </button>
                 </div>
+                {error && <p className="text-sm text-destructive">{error}</p>}
                 <Button type="submit" className="w-full" disabled={loading}>
                   {loading ? "Signing in…" : "Sign in"} <ArrowRight className="ml-1 h-4 w-4" />
                 </Button>
@@ -150,6 +181,8 @@ function AuthPage() {
                 <Field id="su-name" name="full_name" label="Full name" icon={User} placeholder="Jonah Mwangi" />
                 <Field id="su-email" name="email" label="Email" icon={Mail} type="email" placeholder="you@desk.com" autoComplete="email" />
                 <Field id="su-pass" name="password" label="Password" icon={Lock} type="password" placeholder="At least 8 characters" autoComplete="new-password" minLength={8} />
+                {error && <p className="text-sm text-destructive">{error}</p>}
+                {confirmMessage && <p className="text-sm text-primary">{confirmMessage}</p>}
                 <Button type="submit" className="w-full" disabled={loading}>
                   {loading ? "Creating…" : "Create account"} <ArrowRight className="ml-1 h-4 w-4" />
                 </Button>
