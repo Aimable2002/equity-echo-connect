@@ -40,7 +40,11 @@ function Directory() {
   const [platform, setPlatform] = useState("all");
   const [sort, setSort] = useState("roi");
 
-  const { data: masters = [] } = useMastersDirectory();
+  const {
+    data: masters = [],
+    isLoading: dirLoading,
+    isError: dirError,
+  } = useMastersDirectory();
   const accountIds = useMemo(() => masters.map((m) => m.account_id), [masters]);
   const statsMap = useMastersStats(accountIds);
 
