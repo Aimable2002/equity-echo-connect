@@ -65,7 +65,7 @@ function Pricing() {
             title="One flat fee. No spread markup."
             sub="Your broker charges what your broker charges. We don't touch it, mark it up, or take a rebate for routing you."
           />
-          <div className="mt-14 grid gap-6 lg:grid-cols-3">
+          <div className="mt-14 grid gap-6 sm:grid-cols-2 xl:grid-cols-4">
             {packages.map((p) => (
               <div key={p.code} className="panel flex flex-col p-7">
                 <div className="font-display text-lg font-semibold">{packageName(p)}</div>
