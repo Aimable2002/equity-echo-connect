@@ -67,6 +67,21 @@ function Landing() {
 
   const totalClosedTrades = top.reduce((sum, t) => sum + (t.stats?.closedTrades ?? 0), 0);
 
+  const heroTiles: { label: string; value: string; icon: typeof ShieldCheck }[] = [
+    ...(masters.length > 0
+      ? [{ label: "Verified masters", value: masters.length.toString(), icon: ShieldCheck }]
+      : []),
+    ...(totalClosedTrades > 0
+      ? [
+          {
+            label: "Closed trades from featured masters",
+            value: totalClosedTrades.toLocaleString(),
+            icon: Activity,
+          },
+        ]
+      : []),
+  ];
+
   return (
     <div className="min-h-screen">
       <MarketingNav />
