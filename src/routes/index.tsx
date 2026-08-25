@@ -105,9 +105,17 @@ function Landing() {
             </Button>
           </div>
 
-          <div className="mt-14 grid gap-px overflow-hidden rounded-xl border border-border bg-border sm:grid-cols-2 lg:grid-cols-4">
+          <div className="mt-14 grid max-w-2xl gap-px overflow-hidden rounded-xl border border-border bg-border sm:grid-cols-2">
             {[
-              { label: "Verified masters", value: masters.length.toString(), icon: ShieldCheck },
+              ...(masters.length > 0
+                ? [
+                    {
+                      label: "Verified masters",
+                      value: masters.length.toString(),
+                      icon: ShieldCheck,
+                    },
+                  ]
+                : []),
               ...(totalClosedTrades > 0
                 ? [
                     {
