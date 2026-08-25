@@ -144,6 +144,16 @@ function Leaderboard() {
             </TableRow>
           </TableHeader>
           <TableBody>
+            {rows.length === 0 && (
+              <TableRow>
+                <TableCell
+                  colSpan={COLS.length + 2}
+                  className="py-10 text-center text-sm text-muted-foreground"
+                >
+                  No ranked masters available yet.
+                </TableCell>
+              </TableRow>
+            )}
             {rows.map((r, i) => (
               <TableRow key={r.master.account_id}>
                 <TableCell className="num text-muted-foreground">{i + 1}</TableCell>

@@ -61,7 +61,7 @@ export function MarketingFooter() {
           <p className="mt-4 text-xs leading-relaxed text-muted-foreground">
             CFDs are complex instruments and come with a high risk of losing money rapidly due to
             leverage. Past performance of any master account is not indicative of future results.
-            All figures shown on this site are illustrative sample data.
+            Performance figures are computed from executed trade history and may lag live fills.
           </p>
         </div>
       </div>

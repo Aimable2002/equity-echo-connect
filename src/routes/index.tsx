@@ -67,6 +67,21 @@ function Landing() {
 
   const totalClosedTrades = top.reduce((sum, t) => sum + (t.stats?.closedTrades ?? 0), 0);
 
+  const heroTiles: { label: string; value: string; icon: typeof ShieldCheck }[] = [
+    ...(masters.length > 0
+      ? [{ label: "Verified masters", value: masters.length.toString(), icon: ShieldCheck }]
+      : []),
+    ...(totalClosedTrades > 0
+      ? [
+          {
+            label: "Closed trades from featured masters",
+            value: totalClosedTrades.toLocaleString(),
+            icon: Activity,
+          },
+        ]
+      : []),
+  ];
+
   return (
     <div className="min-h-screen">
       <MarketingNav />
@@ -105,26 +120,17 @@ function Landing() {
             </Button>
           </div>
 
-          <div className="mt-14 grid gap-px overflow-hidden rounded-xl border border-border bg-border sm:grid-cols-2 lg:grid-cols-4">
-            {[
-              { label: "Verified masters", value: masters.length.toString(), icon: ShieldCheck },
-              ...(totalClosedTrades > 0
-                ? [
-                    {
-                      label: "Closed trades from featured masters",
-                      value: totalClosedTrades.toLocaleString(),
-                      icon: Activity,
-                    },
-                  ]
-                : []),
-            ].map((s) => (
-              <div key={s.label} className="bg-surface p-5">
-                <s.icon className="h-4 w-4 text-primary" />
-                <div className="num mt-3 text-2xl font-semibold">{s.value}</div>
-                <div className="mt-1 text-xs text-muted-foreground">{s.label}</div>
-              </div>
-            ))}
-          </div>
+          {heroTiles.length > 0 && (
+            <div className="mt-14 grid max-w-2xl gap-px overflow-hidden rounded-xl border border-border bg-border sm:grid-cols-2">
+              {heroTiles.map((s) => (
+                <div key={s.label} className="bg-surface p-5">
+                  <s.icon className="h-4 w-4 text-primary" />
+                  <div className="num mt-3 text-2xl font-semibold">{s.value}</div>
+                  <div className="mt-1 text-xs text-muted-foreground">{s.label}</div>
+                </div>
+              ))}
+            </div>
+          )}
         </div>
 
         {/* ticker */}

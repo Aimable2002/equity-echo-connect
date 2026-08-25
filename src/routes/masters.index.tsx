@@ -40,7 +40,11 @@ function Directory() {
   const [platform, setPlatform] = useState("all");
   const [sort, setSort] = useState("roi");
 
-  const { data: masters = [] } = useMastersDirectory();
+  const {
+    data: masters = [],
+    isLoading: dirLoading,
+    isError: dirError,
+  } = useMastersDirectory();
   const accountIds = useMemo(() => masters.map((m) => m.account_id), [masters]);
   const statsMap = useMastersStats(accountIds);
 
@@ -101,6 +105,18 @@ function Directory() {
           </SelectContent>
         </Select>
       </div>
+
+      {list.length === 0 && (
+        <div className="panel mt-6 p-10 text-center text-sm text-muted-foreground">
+          {dirLoading
+            ? "Loading masters…"
+            : dirError
+              ? "Sign in to browse the masters directory."
+              : masters.length === 0
+                ? "No masters are accepting copiers yet."
+                : "No masters match your filters."}
+        </div>
+      )}
 
       <div className="mt-6 grid gap-4 md:grid-cols-2 xl:grid-cols-3">
         {list.map(({ master: m, stats, isLoading }) => (
