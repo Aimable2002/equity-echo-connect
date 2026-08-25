@@ -105,7 +105,7 @@ function Landing() {
             </Button>
           </div>
 
-          <div className="mt-14 grid max-w-2xl gap-px overflow-hidden rounded-xl border border-border bg-border sm:grid-cols-2">
+          <div className="mt-14 hidden max-w-2xl gap-px overflow-hidden rounded-xl border border-border bg-border has-[div]:grid sm:grid-cols-2">
             {[
               ...(masters.length > 0
                 ? [
