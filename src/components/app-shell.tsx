@@ -14,8 +14,7 @@ import {
 } from "lucide-react";
 import { useState, type ReactNode } from "react";
 import { Logo, Avatar } from "@/components/brand";
-import { useLiveAccountState, useMyAccounts, useSession, freshnessMs } from "@/hooks/use-copydesk";
-import { relativeTime } from "@/lib/trades";
+import { useMyAccounts, useSession, usePlatformStats } from "@/hooks/use-copydesk";
 import { cn } from "@/lib/utils";
 
 const NAV = [
@@ -43,17 +42,9 @@ export function AppShell({
   const [open, setOpen] = useState(false);
   const { user } = useSession();
   const { data: accounts = [] } = useMyAccounts();
-  const live = useLiveAccountState(accounts.map((a) => a.account_id));
-  const freshest = Object.values(live)
-    .map((r) => freshnessMs(r.updated_at))
-    .filter((n): n is number => n !== null)
-    .sort((a, b) => a - b)[0];
-  const lastUpdate = Object.values(live)
-    .map((r) => r.updated_at)
-    .filter(Boolean)
-    .sort()
-    .reverse()[0];
-  const healthy = freshest !== undefined && freshest < 120_000;
+  const { data: stats } = usePlatformStats();
+  const latency = stats?.avg_relay_latency_seconds_30d ?? null;
+  const healthy = latency !== null;
   const name = user?.email?.split("@")[0] ?? "Your desk";
 
   return (
@@ -87,10 +78,17 @@ export function AppShell({
             {healthy ? "Relay healthy" : "Awaiting relay data"}
           </div>
           <div className="num mt-2 text-xl font-semibold text-primary">
-            {freshest === undefined ? "—" : freshest < 1000 ? "<1s" : `${Math.round(freshest / 1000)}s`}
+            {latency === null
+              ? "—"
+              : latency < 1
+                ? `${Math.round(latency * 1000)}ms`
+                : `${latency.toFixed(2)}s`}
           </div>
           <div className="text-[11px] text-muted-foreground">
-            since last account update{lastUpdate ? ` · ${relativeTime(lastUpdate)}` : ""}
+            avg copy latency, 30d
+            {stats?.avg_relay_latency_sample_size_30d
+              ? ` · ${stats.avg_relay_latency_sample_size_30d.toLocaleString()} copies`
+              : ""}
           </div>
         </div>
         <div className="absolute inset-x-3 bottom-3 flex items-center gap-3 rounded-lg border border-sidebar-border bg-surface-2 p-3">

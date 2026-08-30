@@ -15,7 +15,12 @@ import { MarketingFooter, MarketingNav } from "@/components/marketing";
 import { Avatar, PnL, SectionTitle } from "@/components/brand";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
-import { useMastersDirectory, useMastersStats, usePackages } from "@/hooks/use-copydesk";
+import {
+  useMastersDirectory,
+  useMastersStats,
+  usePackages,
+  usePlatformStats,
+} from "@/hooks/use-copydesk";
 import { packageName, packagePrice } from "@/lib/supabase";
 import { fmtMoney } from "@/lib/format";
 import { bySymbol } from "@/lib/trades";
@@ -43,6 +48,7 @@ export const Route = createFileRoute("/")({
 function Landing() {
   const { data: masters = [] } = useMastersDirectory();
   const { data: packages = [] } = usePackages();
+  const { data: stats } = usePlatformStats();
 
   const accountIds = useMemo(() => masters.map((m) => m.account_id), [masters]);
   const statsMap = useMastersStats(accountIds);
@@ -67,19 +73,37 @@ function Landing() {
 
   const totalClosedTrades = top.reduce((sum, t) => sum + (t.stats?.closedTrades ?? 0), 0);
 
+  const latency = stats?.avg_relay_latency_seconds_30d ?? null;
+
   const heroTiles: { label: string; value: string; icon: typeof ShieldCheck }[] = [
-    ...(masters.length > 0
-      ? [{ label: "Verified masters", value: masters.length.toString(), icon: ShieldCheck }]
+    ...(stats?.masters_count
+      ? [{ label: "Verified masters", value: stats.masters_count.toString(), icon: ShieldCheck }]
+      : masters.length > 0
+        ? [{ label: "Verified masters", value: masters.length.toString(), icon: ShieldCheck }]
+        : []),
+    ...(stats?.live_accounts_count
+      ? [{ label: "Live accounts on the relay", value: stats.live_accounts_count.toString(), icon: Gauge }]
       : []),
-    ...(totalClosedTrades > 0
+    ...(stats?.copied_today
+      ? [{ label: "Trades copied today", value: stats.copied_today.toLocaleString(), icon: Zap }]
+      : []),
+    ...(latency !== null
       ? [
           {
-            label: "Closed trades from featured masters",
-            value: totalClosedTrades.toLocaleString(),
+            label: "Avg copy latency (30d)",
+            value: latency < 1 ? `${Math.round(latency * 1000)}ms` : `${latency.toFixed(2)}s`,
             icon: Activity,
           },
         ]
-      : []),
+      : totalClosedTrades > 0
+        ? [
+            {
+              label: "Closed trades from featured masters",
+              value: totalClosedTrades.toLocaleString(),
+              icon: Activity,
+            },
+          ]
+        : []),
   ];
 
   return (
@@ -96,7 +120,10 @@ function Landing() {
         <div className="relative mx-auto max-w-7xl px-5 pb-16 pt-20 sm:pt-28">
           <div className="inline-flex items-center gap-2 rounded-full border border-border bg-surface px-3 py-1 text-xs text-muted-foreground">
             <span className="live-dot h-1.5 w-1.5 rounded-full bg-long" />
-            Relay live · {masters.length} verified masters onboard
+            {(() => {
+              const count = stats?.masters_count ?? masters.length;
+              return count > 0 ? `Relay live · ${count} verified masters onboard` : "Relay live";
+            })()}
           </div>
           <h1 className="mt-6 max-w-4xl text-5xl font-bold leading-[1.03] sm:text-6xl lg:text-7xl">
             Their fill.{" "}

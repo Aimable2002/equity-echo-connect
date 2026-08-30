@@ -111,7 +111,7 @@ function Directory() {
           {dirLoading
             ? "Loading masters…"
             : dirError
-              ? "Sign in to browse the masters directory."
+              ? "The masters directory is temporarily unavailable. Try again shortly."
               : masters.length === 0
                 ? "No masters are accepting copiers yet."
                 : "No masters match your filters."}

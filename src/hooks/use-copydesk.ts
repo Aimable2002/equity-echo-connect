@@ -160,6 +160,16 @@ export function useMastersDirectory() {
   });
 }
 
+/** Public platform-wide relay stats (no auth required). */
+export function usePlatformStats() {
+  return useQuery({
+    queryKey: ["platform-stats"],
+    queryFn: () => endpoints.platformStats(),
+    staleTime: 30_000,
+    refetchInterval: 60_000,
+  });
+}
+
 export function useMasterTrades(accountId: string | null | undefined) {
   return useQuery({
     queryKey: ["master-trades", accountId],
