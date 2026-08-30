@@ -67,19 +67,37 @@ function Landing() {
 
   const totalClosedTrades = top.reduce((sum, t) => sum + (t.stats?.closedTrades ?? 0), 0);
 
+  const latency = stats?.avg_relay_latency_seconds_30d ?? null;
+
   const heroTiles: { label: string; value: string; icon: typeof ShieldCheck }[] = [
-    ...(masters.length > 0
-      ? [{ label: "Verified masters", value: masters.length.toString(), icon: ShieldCheck }]
+    ...(stats?.masters_count
+      ? [{ label: "Verified masters", value: stats.masters_count.toString(), icon: ShieldCheck }]
+      : masters.length > 0
+        ? [{ label: "Verified masters", value: masters.length.toString(), icon: ShieldCheck }]
+        : []),
+    ...(stats?.live_accounts_count
+      ? [{ label: "Live accounts on the relay", value: stats.live_accounts_count.toString(), icon: Gauge }]
       : []),
-    ...(totalClosedTrades > 0
+    ...(stats?.copied_today
+      ? [{ label: "Trades copied today", value: stats.copied_today.toLocaleString(), icon: Zap }]
+      : []),
+    ...(latency !== null
       ? [
           {
-            label: "Closed trades from featured masters",
-            value: totalClosedTrades.toLocaleString(),
+            label: "Avg copy latency (30d)",
+            value: latency < 1 ? `${Math.round(latency * 1000)}ms` : `${latency.toFixed(2)}s`,
             icon: Activity,
           },
         ]
-      : []),
+      : totalClosedTrades > 0
+        ? [
+            {
+              label: "Closed trades from featured masters",
+              value: totalClosedTrades.toLocaleString(),
+              icon: Activity,
+            },
+          ]
+        : []),
   ];
 
   return (
