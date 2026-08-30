@@ -54,11 +54,13 @@ const EMPTY_CHALLENGE_FORM: Omit<ChallengeRow, "id" | "created_at"> = {
   description: "",
   is_fixed: false,
   fee: 0,
+  account_size_label: "",
   profit_target_pct: 8,
   max_daily_loss_pct: 5,
   max_drawdown_pct: 10,
   min_days: 5,
   reward_amount: 0,
+  reward_text: "",
   active: true,
 };
 
@@ -355,6 +357,11 @@ function Admin() {
                   <div key={c.id} className="panel p-5">
                     <div className="flex flex-wrap items-center gap-3">
                       <div className="font-display font-semibold">{c.name}</div>
+                      {c.account_size_label && (
+                        <Badge variant="outline" className="num">
+                          {c.account_size_label}
+                        </Badge>
+                      )}
                       {c.is_fixed && <Badge>Mandatory first</Badge>}
                       <span className="num ml-auto text-sm text-muted-foreground">Fee {fmtMoney(c.fee)}</span>
                       <Button size="sm" variant="outline" onClick={() => startEdit(c)}>
@@ -370,6 +377,7 @@ function Admin() {
                     </div>
                     <p className="mt-4 text-xs text-muted-foreground">
                       Reward: {c.reward_amount ? `${fmtMoney(c.reward_amount)} wallet credit` : "no wallet credit"}
+                      {c.reward_text ? ` + ${c.reward_text} (manually fulfilled)` : ""}
                     </p>
                   </div>
                 ))}
@@ -417,8 +425,21 @@ function Admin() {
                   </div>
                 </div>
                 <div className="space-y-1.5">
+                  <Label htmlFor="as">Account size label</Label>
+                  <Input
+                    id="as"
+                    value={form.account_size_label ?? ""}
+                    onChange={(e) => setForm((f) => ({ ...f, account_size_label: e.target.value }))}
+                    placeholder="e.g. 10K tier"
+                  />
+                </div>
+                <div className="space-y-1.5">
                   <Label htmlFor="ra">Reward amount (wallet credit)</Label>
                   <Input id="ra" className="num" type="number" value={form.reward_amount ?? 0} onChange={(e) => setForm((f) => ({ ...f, reward_amount: Number(e.target.value) }))} />
+                </div>
+                <div className="space-y-1.5">
+                  <Label htmlFor="rt">Reward perk (manually fulfilled)</Label>
+                  <Input id="rt" value={form.reward_text ?? ""} onChange={(e) => setForm((f) => ({ ...f, reward_text: e.target.value }))} placeholder="e.g. Funded master seat" />
                 </div>
                 <div className="flex items-center justify-between rounded-md border border-border p-3">
                   <div>
