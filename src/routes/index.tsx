@@ -15,7 +15,12 @@ import { MarketingFooter, MarketingNav } from "@/components/marketing";
 import { Avatar, PnL, SectionTitle } from "@/components/brand";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
-import { useMastersDirectory, useMastersStats, usePackages } from "@/hooks/use-copydesk";
+import {
+  useMastersDirectory,
+  useMastersStats,
+  usePackages,
+  usePlatformStats,
+} from "@/hooks/use-copydesk";
 import { packageName, packagePrice } from "@/lib/supabase";
 import { fmtMoney } from "@/lib/format";
 import { bySymbol } from "@/lib/trades";
