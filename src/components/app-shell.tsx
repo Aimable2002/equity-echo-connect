@@ -14,8 +14,7 @@ import {
 } from "lucide-react";
 import { useState, type ReactNode } from "react";
 import { Logo, Avatar } from "@/components/brand";
-import { useLiveAccountState, useMyAccounts, useSession, freshnessMs } from "@/hooks/use-copydesk";
-import { relativeTime } from "@/lib/trades";
+import { useMyAccounts, useSession, usePlatformStats } from "@/hooks/use-copydesk";
 import { cn } from "@/lib/utils";
 
 const NAV = [
