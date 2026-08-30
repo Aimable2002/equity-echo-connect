@@ -42,18 +42,9 @@ export function AppShell({
 }) {
   const [open, setOpen] = useState(false);
   const { user } = useSession();
-  const { data: accounts = [] } = useMyAccounts();
-  const live = useLiveAccountState(accounts.map((a) => a.account_id));
-  const freshest = Object.values(live)
-    .map((r) => freshnessMs(r.updated_at))
-    .filter((n): n is number => n !== null)
-    .sort((a, b) => a - b)[0];
-  const lastUpdate = Object.values(live)
-    .map((r) => r.updated_at)
-    .filter(Boolean)
-    .sort()
-    .reverse()[0];
-  const healthy = freshest !== undefined && freshest < 120_000;
+  const { data: stats } = usePlatformStats();
+  const latency = stats?.avg_relay_latency_seconds_30d ?? null;
+  const healthy = latency !== null;
   const name = user?.email?.split("@")[0] ?? "Your desk";
 
   return (
