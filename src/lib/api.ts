@@ -161,11 +161,13 @@ export type ChallengeApiRow = {
   description: string | null;
   is_fixed: boolean;
   fee: number;
+  account_size_label: string | null;
   profit_target_pct: number;
   max_daily_loss_pct: number;
   max_drawdown_pct: number;
   min_days: number;
   reward_amount: number | null;
+  reward_text: string | null;
   active: boolean;
   created_at?: string | null;
 };
@@ -226,11 +228,15 @@ export const endpoints = {
   /* ------------------------------------------------------------- public */
   challenges: () =>
     api
-      .get<ChallengeApiRow[] | { challenges: ChallengeApiRow[] }>("/challenges")
+      .get<ChallengeApiRow[] | { challenges: ChallengeApiRow[] }>("/challenges", {
+        anonymous: true,
+      })
       .then((r) => unwrapList<ChallengeApiRow>(r, "challenges")),
   mastersDirectory: () =>
     api
-      .get<DirectoryMaster[] | { masters: DirectoryMaster[] }>("/masters/directory")
+      .get<DirectoryMaster[] | { masters: DirectoryMaster[] }>("/masters/directory", {
+        anonymous: true,
+      })
       .then((r) => unwrapList<DirectoryMaster>(r, "masters")),
   currencies: () =>
     api
@@ -302,6 +308,8 @@ export const endpoints = {
     api
       .get(`/accounts/${accountId}/wallet/transactions`)
       .then((r) => unwrapList<Record<string, unknown>>(r, "transactions")),
+  walletTopup: (accountId: string, amount: number) =>
+    api.post<Record<string, unknown>>(`/accounts/${accountId}/wallet/topup`, { amount }),
   billing: (accountId: string) => api.get<Record<string, unknown>>(`/accounts/${accountId}/billing`),
   selectPackage: (accountId: string, packageCode: string) =>
     api.post(`/accounts/${accountId}/billing/select-package`, { package_code: packageCode }),
