@@ -120,7 +120,10 @@ function Landing() {
         <div className="relative mx-auto max-w-7xl px-5 pb-16 pt-20 sm:pt-28">
           <div className="inline-flex items-center gap-2 rounded-full border border-border bg-surface px-3 py-1 text-xs text-muted-foreground">
             <span className="live-dot h-1.5 w-1.5 rounded-full bg-long" />
-            Relay live · {stats?.masters_count ?? masters.length} verified masters onboard
+            {(() => {
+              const count = stats?.masters_count ?? masters.length;
+              return count > 0 ? `Relay live · ${count} verified masters onboard` : "Relay live";
+            })()}
           </div>
           <h1 className="mt-6 max-w-4xl text-5xl font-bold leading-[1.03] sm:text-6xl lg:text-7xl">
             Their fill.{" "}
