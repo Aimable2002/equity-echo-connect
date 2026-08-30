@@ -224,14 +224,6 @@ export function unwrapList<T>(res: unknown, ...keys: string[]): T[] {
   return [];
 }
 
-export type PlatformStats = {
-  masters_count: number;
-  live_accounts_count: number;
-  copied_today: number;
-  avg_relay_latency_seconds_30d: number | null;
-  avg_relay_latency_sample_size_30d: number | null;
-};
-
 export const endpoints = {
   /* ------------------------------------------------------------- public */
   challenges: () =>
@@ -246,11 +238,18 @@ export const endpoints = {
         anonymous: true,
       })
       .then((r) => unwrapList<DirectoryMaster>(r, "masters")),
-  platformStats: () => api.get<PlatformStats>("/platform/stats", { anonymous: true }),
   currencies: () =>
     api
       .get<{ currencies: PaymentCurrency[] }>("/payments/currencies", { anonymous: true })
       .then((r) => unwrapList<PaymentCurrency>(r, "currencies")),
+  platformStats: () =>
+    api.get<{
+      masters_count: number;
+      live_accounts_count: number;
+      copied_today: number;
+      avg_relay_latency_seconds_30d: number | null;
+      avg_relay_latency_sample_size_30d: number;
+    }>("/platform/stats", { anonymous: true }),
   quote: (body: { amount_usd: number; currency: string }) =>
     api.post<Record<string, unknown>>("/payments/quote", body, { anonymous: true }),
 
@@ -340,4 +339,3 @@ export const endpoints = {
   adminApprovePayout: (payoutId: string) => api.post(`/admin/payouts/${payoutId}/approve`),
   adminRejectPayout: (payoutId: string) => api.post(`/admin/payouts/${payoutId}/reject`),
 };
-

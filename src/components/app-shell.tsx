@@ -14,7 +14,7 @@ import {
 } from "lucide-react";
 import { useState, type ReactNode } from "react";
 import { Logo, Avatar } from "@/components/brand";
-import { useMyAccounts, useSession, usePlatformStats } from "@/hooks/use-copydesk";
+import { useMyAccounts, useSession, useIsAdmin, usePlatformStats } from "@/hooks/use-copydesk";
 import { cn } from "@/lib/utils";
 
 const NAV = [
@@ -24,9 +24,10 @@ const NAV = [
   { to: "/trades", label: "Trade history", icon: History },
   { to: "/challenges", label: "Challenges", icon: Target },
   { to: "/wallet", label: "Wallet & billing", icon: Wallet },
-  { to: "/admin", label: "Admin console", icon: ShieldCheck },
   { to: "/settings", label: "Settings", icon: Settings },
 ] as const;
+
+const ADMIN_NAV = { to: "/admin", label: "Admin console", icon: ShieldCheck } as const;
 
 export function AppShell({
   title,
@@ -41,10 +42,11 @@ export function AppShell({
 }) {
   const [open, setOpen] = useState(false);
   const { user } = useSession();
+  const { isAdmin } = useIsAdmin();
   const { data: accounts = [] } = useMyAccounts();
-  const { data: stats } = usePlatformStats();
-  const latency = stats?.avg_relay_latency_seconds_30d ?? null;
-  const healthy = latency !== null;
+  const { data: platformStats } = usePlatformStats();
+  const avgLatency = platformStats?.avg_relay_latency_seconds_30d ?? null;
+  const hasRelayData = avgLatency !== null;
   const name = user?.email?.split("@")[0] ?? "Your desk";
 
   return (
@@ -59,7 +61,7 @@ export function AppShell({
           <Logo />
         </div>
         <nav className="space-y-1 p-3">
-          {NAV.map(({ to, label, icon: Icon }) => (
+          {[...NAV, ...(isAdmin ? [ADMIN_NAV] : [])].map(({ to, label, icon: Icon }) => (
             <Link
               key={to}
               to={to}
@@ -74,21 +76,14 @@ export function AppShell({
         </nav>
         <div className="mx-3 mt-4 rounded-lg border border-sidebar-border bg-surface-2 p-3">
           <div className="flex items-center gap-2 text-xs text-muted-foreground">
-            <span className={cn("live-dot h-1.5 w-1.5 rounded-full", healthy ? "bg-long" : "bg-muted-foreground")} />
-            {healthy ? "Relay healthy" : "Awaiting relay data"}
+            <span className={cn("live-dot h-1.5 w-1.5 rounded-full", hasRelayData ? "bg-long" : "bg-muted-foreground")} />
+            {hasRelayData ? "Relay healthy" : "No relay data yet"}
           </div>
           <div className="num mt-2 text-xl font-semibold text-primary">
-            {latency === null
-              ? "—"
-              : latency < 1
-                ? `${Math.round(latency * 1000)}ms`
-                : `${latency.toFixed(2)}s`}
+            {hasRelayData ? `${avgLatency!.toFixed(1)}s` : "—"}
           </div>
           <div className="text-[11px] text-muted-foreground">
-            avg copy latency, 30d
-            {stats?.avg_relay_latency_sample_size_30d
-              ? ` · ${stats.avg_relay_latency_sample_size_30d.toLocaleString()} copies`
-              : ""}
+            {hasRelayData ? "avg relay latency (30d)" : "no successful copies in the last 30 days"}
           </div>
         </div>
         <div className="absolute inset-x-3 bottom-3 flex items-center gap-3 rounded-lg border border-sidebar-border bg-surface-2 p-3">

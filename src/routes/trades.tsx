@@ -23,7 +23,7 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { fmtTime } from "@/lib/format";
-import { dealSide } from "@/lib/trades";
+import { closedDeals, dealSide } from "@/lib/trades";
 import { useMyAccounts, useActiveAccount, useAccountTrades } from "@/hooks/use-copydesk";
 
 export const Route = createFileRoute("/trades")({
@@ -62,7 +62,7 @@ function Trades() {
 
   const rows = useMemo(
     () =>
-      deals
+      closedDeals(deals)
         .filter((d) => (symbol === "all" ? true : d.symbol === symbol))
         .filter((d) => (side === "all" ? true : dealSide(d) === side))
         .filter((d) =>
