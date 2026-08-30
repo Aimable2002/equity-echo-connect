@@ -32,6 +32,7 @@ import {
   useMasterTrades,
   useMyAccounts,
   useMasterFollowers,
+  useLiveAccountState,
 } from "@/hooks/use-copydesk";
 
 export const Route = createFileRoute("/masters/$masterId")({
@@ -59,6 +60,7 @@ function MasterProfile() {
   const { data: directory = [], isLoading: directoryLoading } = useMastersDirectory();
   const { data: deals = [], isLoading: tradesLoading } = useMasterTrades(masterId);
   const { data: myAccounts = [] } = useMyAccounts();
+  const liveState = useLiveAccountState(masterId ? [masterId] : []);
 
   const m = directory.find((x) => x.account_id === masterId);
   const isOwner = myAccounts.some((a) => a.account_id === masterId);
@@ -96,7 +98,10 @@ function MasterProfile() {
   }
 
   const closed = closedDeals(deals);
-  const stats = computeStats(deals, 0);
+  const currentBalance = masterId ? liveState[masterId]?.balance : null;
+  const realizedNet = closed.reduce((s, d) => s + (Number(d.pnl) || 0), 0);
+  const startingBalance = currentBalance != null ? currentBalance - realizedNet : 0;
+  const stats = computeStats(deals, startingBalance);
   const symbolBreakdown = bySymbol(deals);
   const hourBreakdown = byHour(deals);
   const recentTrades = closed.slice(-10).reverse();

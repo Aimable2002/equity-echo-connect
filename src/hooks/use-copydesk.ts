@@ -12,7 +12,7 @@ import {
   type SubscriptionRow,
 } from "@/lib/supabase";
 import { endpoints, type DirectoryMaster, type Deal } from "@/lib/api";
-import { computeStats, type TradeStats } from "@/lib/trades";
+import { closedDeals, computeStats, type TradeStats } from "@/lib/trades";
 
 /* ------------------------------------------------------------ session */
 
@@ -48,6 +48,37 @@ export function useRequireAuth() {
     if (!loading && !session) navigate({ to: "/auth" });
   }, [loading, session, navigate]);
   return { session, loading };
+}
+
+/** True once we know the signed-in user's `app_metadata.is_admin` flag.
+ * That flag can only be set server-side (Supabase dashboard or the admin
+ * API with the service-role key) - a signed-in user has no way to grant
+ * it to themselves - matching the same trust assumption
+ * admin_routes.py's `_authenticate_admin` relies on for every /admin/*
+ * backend call. This is a UI convenience only (hide the link, bounce the
+ * page); it is NOT what makes /admin/* safe - the backend check is. */
+export function useIsAdmin() {
+  const { session, loading } = useSession();
+  const isAdmin = Boolean(
+    (session?.user?.app_metadata as Record<string, unknown> | undefined)?.["is_admin"],
+  );
+  return { isAdmin, loading };
+}
+
+/** Redirects away from admin-only routes for anyone without the
+ * `is_admin` app_metadata flag - same idea as useRequireAuth, but also
+ * checks the admin flag once the session is known. */
+export function useRequireAdmin() {
+  const { session, loading: sessionLoading } = useSession();
+  const { isAdmin, loading: adminLoading } = useIsAdmin();
+  const navigate = useNavigate();
+  const loading = sessionLoading || adminLoading;
+  useEffect(() => {
+    if (loading) return;
+    if (!session) navigate({ to: "/auth" });
+    else if (!isAdmin) navigate({ to: "/dashboard" });
+  }, [loading, session, isAdmin, navigate]);
+  return { session, isAdmin, loading };
 }
 
 /* ----------------------------------------------------------- accounts */
@@ -121,7 +152,7 @@ export function useLiveAccountState(accountIds: string[]) {
       });
 
     const channel = supabase
-      .channel(`live_state_${ids.join("_").slice(0, 60)}`)
+      .channel(`live_state_${Math.random().toString(36).slice(2)}`)
       .on(
         "postgres_changes",
         { event: "*", schema: "public", table: "live_account_state" },
@@ -160,13 +191,15 @@ export function useMastersDirectory() {
   });
 }
 
-/** Public platform-wide relay stats (no auth required). */
+/** Real relay latency (from /platform/stats' avg_relay_latency_seconds_30d),
+ * not "time since this account's live_account_state row last updated" -
+ * that old proxy measured how stale the polling loop was, not how long a
+ * copy actually takes to relay. Public endpoint, works logged-out too. */
 export function usePlatformStats() {
   return useQuery({
     queryKey: ["platform-stats"],
-    queryFn: () => endpoints.platformStats(),
-    staleTime: 30_000,
-    refetchInterval: 60_000,
+    queryFn: endpoints.platformStats,
+    staleTime: 60_000,
   });
 }
 
@@ -219,6 +252,10 @@ export function useMastersStats(accountIds: string[]) {
       staleTime: 60_000,
     })),
   });
+  // Public masters' live_account_state rows are now readable (RLS opened
+  // up for is_public masters) - use the real current balance to back out
+  // a startingBalance instead of assuming every master started at 0.
+  const live = useLiveAccountState(ids);
 
   return useMemo(() => {
     const map = new Map<
@@ -228,8 +265,14 @@ export function useMastersStats(accountIds: string[]) {
     ids.forEach((id, i) => {
       const q = queries[i];
       const trades = q?.data ?? [];
+      const currentBalance = live[id]?.balance;
+      let startingBalance = 0;
+      if (currentBalance != null) {
+        const realizedNet = closedDeals(trades).reduce((s, d) => s + (Number(d.pnl) || 0), 0);
+        startingBalance = currentBalance - realizedNet;
+      }
       map.set(id, {
-        stats: q?.data ? computeStats(q.data) : null,
+        stats: q?.data ? computeStats(q.data, startingBalance) : null,
         trades,
         isLoading: q?.isLoading ?? false,
         isError: q?.isError ?? false,
@@ -237,7 +280,7 @@ export function useMastersStats(accountIds: string[]) {
     });
     return map;
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [ids, queries.map((q) => q.dataUpdatedAt).join(",")]);
+  }, [ids, queries.map((q) => q.dataUpdatedAt).join(","), live]);
 }
 
 export function useMasterFollowers(accountId: string | null | undefined) {

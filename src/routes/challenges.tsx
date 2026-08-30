@@ -296,11 +296,6 @@ function ChallengesPage() {
                 <div key={p.id} className="panel flex flex-col p-6">
                   <div className="flex items-center justify-between">
                     <Target className="h-5 w-5 text-primary" />
-                    {p.account_size_label && (
-                      <Badge variant="outline" className="num text-[10px]">
-                        {p.account_size_label} tier
-                      </Badge>
-                    )}
                   </div>
                   <h3 className="mt-4 font-display text-xl font-semibold">
                     {p.name} {p.is_fixed && <Badge className="ml-1 align-middle">Mandatory first</Badge>}
@@ -318,10 +313,7 @@ function ChallengesPage() {
                   </dl>
                   <div className="mt-5 rounded-md border border-border bg-surface-2 p-3 text-xs text-muted-foreground">
                     <Trophy className="mb-1.5 h-3.5 w-3.5 text-warn" />
-                    {p.reward_amount ? `${fmtMoney(p.reward_amount)} wallet credit on passing` : null}
-                    {p.reward_amount && p.reward_text ? " · " : null}
-                    {p.reward_text ? `${p.reward_text} (fulfilled manually by admin)` : null}
-                    {!p.reward_amount && !p.reward_text ? "No reward configured" : null}
+                    {p.reward_amount ? `${fmtMoney(p.reward_amount)} wallet credit on passing` : "No reward configured"}
                   </div>
                   <Button
                     className="mt-5"

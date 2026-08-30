@@ -23,6 +23,7 @@ import {
 import { ApiError, endpoints } from "@/lib/api";
 import { supabase, type ChallengeRow } from "@/lib/supabase";
 import { fmtDate, fmtMoney } from "@/lib/format";
+import { useRequireAdmin } from "@/hooks/use-copydesk";
 
 export const Route = createFileRoute("/admin")({
   head: () => ({
@@ -53,26 +54,34 @@ const EMPTY_CHALLENGE_FORM: Omit<ChallengeRow, "id" | "created_at"> = {
   description: "",
   is_fixed: false,
   fee: 0,
-  account_size_label: "",
   profit_target_pct: 8,
   max_daily_loss_pct: 5,
   max_drawdown_pct: 10,
   min_days: 5,
   reward_amount: 0,
-  reward_text: "",
   active: true,
 };
 
 function Admin() {
   const queryClient = useQueryClient();
+  const { isAdmin, loading: adminLoading } = useRequireAdmin();
 
-  const summaryQuery = useQuery({ queryKey: ["admin-summary"], queryFn: endpoints.adminSummary });
-  const topMastersQuery = useQuery({ queryKey: ["admin-top-masters"], queryFn: endpoints.adminTopMasters });
-  const usersQuery = useQuery({ queryKey: ["admin-users"], queryFn: endpoints.adminUsers });
-  const payoutsQuery = useQuery({ queryKey: ["admin-payouts"], queryFn: endpoints.adminPayouts });
-  const mastersQuery = useQuery({ queryKey: ["admin-masters"], queryFn: endpoints.adminMasters });
+  const summaryQuery = useQuery({
+    queryKey: ["admin-summary"],
+    queryFn: endpoints.adminSummary,
+    enabled: isAdmin,
+  });
+  const topMastersQuery = useQuery({
+    queryKey: ["admin-top-masters"],
+    queryFn: endpoints.adminTopMasters,
+    enabled: isAdmin,
+  });
+  const usersQuery = useQuery({ queryKey: ["admin-users"], queryFn: endpoints.adminUsers, enabled: isAdmin });
+  const payoutsQuery = useQuery({ queryKey: ["admin-payouts"], queryFn: endpoints.adminPayouts, enabled: isAdmin });
+  const mastersQuery = useQuery({ queryKey: ["admin-masters"], queryFn: endpoints.adminMasters, enabled: isAdmin });
   const challengesQuery = useQuery({
     queryKey: ["admin-challenges"],
+    enabled: isAdmin,
     queryFn: async (): Promise<ChallengeRow[]> => {
       const { data, error } = await supabase
         .from("challenges")
@@ -84,6 +93,18 @@ function Admin() {
   });
 
   const [form, setForm] = useState(EMPTY_CHALLENGE_FORM);
+  const [editingId, setEditingId] = useState<string | null>(null);
+
+  const startEdit = (c: ChallengeRow) => {
+    const { id: _id, created_at: _created_at, ...rest } = c;
+    setForm(rest);
+    setEditingId(c.id);
+  };
+
+  const cancelEdit = () => {
+    setForm(EMPTY_CHALLENGE_FORM);
+    setEditingId(null);
+  };
 
   const fixedChallenge = useMemo(
     () => (challengesQuery.data ?? []).find((c) => c.is_fixed) ?? null,
@@ -115,22 +136,35 @@ function Admin() {
     }
   };
 
-  const createChallenge = async (e: React.FormEvent) => {
+  const saveChallenge = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (form.is_fixed && fixedChallenge) {
-      toast.message(`Saving will unset "mandatory first" on ${fixedChallenge.name}`);
+    const isEditing = editingId !== null;
+    // Unsetting the current "mandatory first" holder only makes sense when
+    // this save is about to hand that flag to a *different* challenge -
+    // editing the fixed challenge itself while leaving is_fixed on is a
+    // no-op, not a hand-off.
+    const willReassignFixed =
+      form.is_fixed && fixedChallenge && fixedChallenge.id !== editingId;
+    if (willReassignFixed) {
+      toast.message(`Saving will unset "mandatory first" on ${fixedChallenge!.name}`);
     }
     try {
-      if (form.is_fixed && fixedChallenge) {
-        await supabase.from("challenges").update({ is_fixed: false }).eq("id", fixedChallenge.id);
+      if (willReassignFixed) {
+        await supabase.from("challenges").update({ is_fixed: false }).eq("id", fixedChallenge!.id);
       }
-      const { error } = await supabase.from("challenges").insert(form);
-      if (error) throw error;
-      toast.success("Challenge program created");
-      setForm(EMPTY_CHALLENGE_FORM);
+      if (isEditing) {
+        const { error } = await supabase.from("challenges").update(form).eq("id", editingId);
+        if (error) throw error;
+        toast.success("Challenge program updated");
+      } else {
+        const { error } = await supabase.from("challenges").insert(form);
+        if (error) throw error;
+        toast.success("Challenge program created");
+      }
+      cancelEdit();
       queryClient.invalidateQueries({ queryKey: ["admin-challenges"] });
     } catch (e) {
-      toast.error(e instanceof Error ? e.message : "Could not create challenge");
+      toast.error(e instanceof Error ? e.message : `Could not ${isEditing ? "update" : "create"} challenge`);
     }
   };
 
@@ -167,6 +201,16 @@ function Admin() {
 
   const payouts = (payoutsQuery.data ?? []) as Record<string, unknown>[];
   const pending = payouts.filter((p) => String(p.status ?? "") === "pending");
+
+  if (adminLoading || !isAdmin) {
+    return (
+      <AppShell title="Admin console" subtitle="Platform operations — restricted access">
+        <div className="panel p-6 text-sm text-muted-foreground">
+          {adminLoading ? "Checking access…" : "Redirecting…"}
+        </div>
+      </AppShell>
+    );
+  }
 
   return (
     <AppShell
@@ -311,13 +355,11 @@ function Admin() {
                   <div key={c.id} className="panel p-5">
                     <div className="flex flex-wrap items-center gap-3">
                       <div className="font-display font-semibold">{c.name}</div>
-                      {c.account_size_label && (
-                        <Badge variant="outline" className="num">
-                          {c.account_size_label}
-                        </Badge>
-                      )}
                       {c.is_fixed && <Badge>Mandatory first</Badge>}
                       <span className="num ml-auto text-sm text-muted-foreground">Fee {fmtMoney(c.fee)}</span>
+                      <Button size="sm" variant="outline" onClick={() => startEdit(c)}>
+                        Edit
+                      </Button>
                       <Switch checked={c.active} onCheckedChange={() => toggleChallengeActive(c)} />
                     </div>
                     <div className="num mt-4 grid grid-cols-2 gap-3 text-sm sm:grid-cols-4">
@@ -328,14 +370,22 @@ function Admin() {
                     </div>
                     <p className="mt-4 text-xs text-muted-foreground">
                       Reward: {c.reward_amount ? `${fmtMoney(c.reward_amount)} wallet credit` : "no wallet credit"}
-                      {c.reward_text ? ` + ${c.reward_text} (manually fulfilled)` : ""}
                     </p>
                   </div>
                 ))}
               </div>
 
-              <form className="panel h-fit space-y-4 p-5" onSubmit={createChallenge}>
-                <div className="font-display font-semibold">New program</div>
+              <form className="panel h-fit space-y-4 p-5" onSubmit={saveChallenge}>
+                <div className="flex items-center justify-between">
+                  <div className="font-display font-semibold">
+                    {editingId ? "Edit program" : "New program"}
+                  </div>
+                  {editingId && (
+                    <Button type="button" size="sm" variant="ghost" onClick={cancelEdit}>
+                      Cancel
+                    </Button>
+                  )}
+                </div>
                 <div className="space-y-1.5">
                   <Label htmlFor="pn">Program name</Label>
                   <Input id="pn" value={form.name} onChange={(e) => setForm((f) => ({ ...f, name: e.target.value }))} />
@@ -345,15 +395,6 @@ function Admin() {
                   <Textarea id="ds" value={form.description ?? ""} onChange={(e) => setForm((f) => ({ ...f, description: e.target.value }))} />
                 </div>
                 <div className="grid gap-3 sm:grid-cols-2">
-                  <div className="space-y-1.5">
-                    <Label htmlFor="as">Account size label</Label>
-                    <Input
-                      id="as"
-                      value={form.account_size_label ?? ""}
-                      onChange={(e) => setForm((f) => ({ ...f, account_size_label: e.target.value }))}
-                      placeholder="e.g. 10K tier"
-                    />
-                  </div>
                   <div className="space-y-1.5">
                     <Label htmlFor="fe">Entry fee</Label>
                     <Input id="fe" className="num" type="number" value={form.fee} onChange={(e) => setForm((f) => ({ ...f, fee: Number(e.target.value) }))} />
@@ -379,10 +420,6 @@ function Admin() {
                   <Label htmlFor="ra">Reward amount (wallet credit)</Label>
                   <Input id="ra" className="num" type="number" value={form.reward_amount ?? 0} onChange={(e) => setForm((f) => ({ ...f, reward_amount: Number(e.target.value) }))} />
                 </div>
-                <div className="space-y-1.5">
-                  <Label htmlFor="rt">Reward perk (manually fulfilled)</Label>
-                  <Input id="rt" value={form.reward_text ?? ""} onChange={(e) => setForm((f) => ({ ...f, reward_text: e.target.value }))} placeholder="e.g. Funded master seat" />
-                </div>
                 <div className="flex items-center justify-between rounded-md border border-border p-3">
                   <div>
                     <Label htmlFor="fixed">Mandatory first challenge</Label>
@@ -395,7 +432,7 @@ function Admin() {
                   <Switch id="fixed" checked={form.is_fixed} onCheckedChange={(v) => setForm((f) => ({ ...f, is_fixed: v }))} />
                 </div>
                 <Button type="submit" className="w-full">
-                  Create program
+                  {editingId ? "Save changes" : "Create program"}
                 </Button>
               </form>
             </div>

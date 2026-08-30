@@ -1,5 +1,8 @@
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
-import { useState } from "react";
+import { useEffect, useState } from "react";
+import { supabase } from "@/lib/supabase";
+import { useRequireAuth } from "@/hooks/use-copydesk";
+
 import { LogOut, ShieldCheck } from "lucide-react";
 import { toast } from "sonner";
 import { AppShell } from "@/components/app-shell";
@@ -30,16 +33,29 @@ export const Route = createFileRoute("/settings")({
 
 function Settings() {
   const navigate = useNavigate();
-  const [email, setEmail] = useState("trader.jm@gmail.com");
+  const { session, loading } = useRequireAuth();
+  const [email, setEmail] = useState("");
+  const [emailBusy, setEmailBusy] = useState(false);
+  const [pwBusy, setPwBusy] = useState(false);
+  const [newPw, setNewPw] = useState("");
+  const [confirmPw, setConfirmPw] = useState("");
+
+  useEffect(() => {
+    if (session?.user?.email) setEmail(session.user.email);
+  }, [session?.user?.email]);
 
   return (
     <AppShell title="Settings" subtitle="Manage your login, security and notifications">
       <div className="grid max-w-3xl gap-6">
         <form
           className="panel space-y-4 p-6"
-          onSubmit={(e) => {
+          onSubmit={async (e) => {
             e.preventDefault();
-            toast.success("Email updated — confirmation sent");
+            setEmailBusy(true);
+            const { error } = await supabase.auth.updateUser({ email });
+            setEmailBusy(false);
+            if (error) toast.error(error.message);
+            else toast.success("Email updated — confirmation sent");
           }}
         >
           <div>
@@ -50,15 +66,40 @@ function Settings() {
           </div>
           <div className="space-y-1.5">
             <Label htmlFor="em">Email</Label>
-            <Input id="em" type="email" value={email} onChange={(e) => setEmail(e.target.value)} />
+            <Input
+              id="em"
+              type="email"
+              value={email}
+              disabled={loading}
+              onChange={(e) => setEmail(e.target.value)}
+            />
           </div>
-          <Button type="submit">Update email</Button>
+          <Button type="submit" disabled={emailBusy || loading}>
+            {emailBusy ? "Updating…" : "Update email"}
+          </Button>
         </form>
 
         <form
           className="panel space-y-4 p-6"
-          onSubmit={(e) => {
+          onSubmit={async (e) => {
             e.preventDefault();
+            if (newPw.length < 8) {
+              toast.error("Password must be at least 8 characters");
+              return;
+            }
+            if (newPw !== confirmPw) {
+              toast.error("Passwords do not match");
+              return;
+            }
+            setPwBusy(true);
+            const { error } = await supabase.auth.updateUser({ password: newPw });
+            setPwBusy(false);
+            if (error) {
+              toast.error(error.message);
+              return;
+            }
+            setNewPw("");
+            setConfirmPw("");
             toast.success("Password changed");
           }}
         >
@@ -68,22 +109,33 @@ function Settings() {
               Changing your password signs out every other device.
             </p>
           </div>
-          <div className="space-y-1.5">
-            <Label htmlFor="cp">Current password</Label>
-            <Input id="cp" type="password" placeholder="••••••••" />
-          </div>
           <div className="grid gap-4 sm:grid-cols-2">
             <div className="space-y-1.5">
               <Label htmlFor="np">New password</Label>
-              <Input id="np" type="password" placeholder="••••••••" />
+              <Input
+                id="np"
+                type="password"
+                placeholder="••••••••"
+                value={newPw}
+                onChange={(e) => setNewPw(e.target.value)}
+              />
             </div>
             <div className="space-y-1.5">
               <Label htmlFor="rp">Confirm new password</Label>
-              <Input id="rp" type="password" placeholder="••••••••" />
+              <Input
+                id="rp"
+                type="password"
+                placeholder="••••••••"
+                value={confirmPw}
+                onChange={(e) => setConfirmPw(e.target.value)}
+              />
             </div>
           </div>
-          <Button type="submit">Change password</Button>
+          <Button type="submit" disabled={pwBusy}>
+            {pwBusy ? "Saving…" : "Change password"}
+          </Button>
         </form>
+
 
         <div className="panel p-6">
           <h2 className="font-display font-semibold">Security & alerts</h2>
@@ -120,10 +172,12 @@ function Settings() {
           </div>
           <Button
             variant="outline"
-            onClick={() => {
+            onClick={async () => {
+              await supabase.auth.signOut();
               toast.success("Signed out");
               navigate({ to: "/auth" });
             }}
+
           >
             <LogOut className="mr-2 h-4 w-4" /> Sign out
           </Button>

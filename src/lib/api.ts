@@ -161,13 +161,11 @@ export type ChallengeApiRow = {
   description: string | null;
   is_fixed: boolean;
   fee: number;
-  account_size_label: string | null;
   profit_target_pct: number;
   max_daily_loss_pct: number;
   max_drawdown_pct: number;
   min_days: number;
   reward_amount: number | null;
-  reward_text: string | null;
   active: boolean;
   created_at?: string | null;
 };
@@ -224,33 +222,28 @@ export function unwrapList<T>(res: unknown, ...keys: string[]): T[] {
   return [];
 }
 
-export type PlatformStats = {
-  masters_count: number;
-  live_accounts_count: number;
-  copied_today: number;
-  avg_relay_latency_seconds_30d: number | null;
-  avg_relay_latency_sample_size_30d: number | null;
-};
-
 export const endpoints = {
   /* ------------------------------------------------------------- public */
   challenges: () =>
     api
-      .get<ChallengeApiRow[] | { challenges: ChallengeApiRow[] }>("/challenges", {
-        anonymous: true,
-      })
+      .get<ChallengeApiRow[] | { challenges: ChallengeApiRow[] }>("/challenges")
       .then((r) => unwrapList<ChallengeApiRow>(r, "challenges")),
   mastersDirectory: () =>
     api
-      .get<DirectoryMaster[] | { masters: DirectoryMaster[] }>("/masters/directory", {
-        anonymous: true,
-      })
+      .get<DirectoryMaster[] | { masters: DirectoryMaster[] }>("/masters/directory")
       .then((r) => unwrapList<DirectoryMaster>(r, "masters")),
-  platformStats: () => api.get<PlatformStats>("/platform/stats", { anonymous: true }),
   currencies: () =>
     api
       .get<{ currencies: PaymentCurrency[] }>("/payments/currencies", { anonymous: true })
       .then((r) => unwrapList<PaymentCurrency>(r, "currencies")),
+  platformStats: () =>
+    api.get<{
+      masters_count: number;
+      live_accounts_count: number;
+      copied_today: number;
+      avg_relay_latency_seconds_30d: number | null;
+      avg_relay_latency_sample_size_30d: number;
+    }>("/platform/stats", { anonymous: true }),
   quote: (body: { amount_usd: number; currency: string }) =>
     api.post<Record<string, unknown>>("/payments/quote", body, { anonymous: true }),
 
@@ -309,8 +302,6 @@ export const endpoints = {
     api
       .get(`/accounts/${accountId}/wallet/transactions`)
       .then((r) => unwrapList<Record<string, unknown>>(r, "transactions")),
-  walletTopup: (accountId: string, amount: number) =>
-    api.post<Record<string, unknown>>(`/accounts/${accountId}/wallet/topup`, { amount }),
   billing: (accountId: string) => api.get<Record<string, unknown>>(`/accounts/${accountId}/billing`),
   selectPackage: (accountId: string, packageCode: string) =>
     api.post(`/accounts/${accountId}/billing/select-package`, { package_code: packageCode }),
@@ -340,4 +331,3 @@ export const endpoints = {
   adminApprovePayout: (payoutId: string) => api.post(`/admin/payouts/${payoutId}/approve`),
   adminRejectPayout: (payoutId: string) => api.post(`/admin/payouts/${payoutId}/reject`),
 };
-

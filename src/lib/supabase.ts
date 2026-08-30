@@ -80,13 +80,11 @@ export type ChallengeRow = {
   description: string | null;
   is_fixed: boolean;
   fee: number;
-  account_size_label: string | null;
   profit_target_pct: number;
   max_daily_loss_pct: number;
   max_drawdown_pct: number;
   min_days: number;
   reward_amount: number | null;
-  reward_text: string | null;
   active: boolean;
   created_at?: string | null;
 };
