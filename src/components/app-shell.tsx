@@ -78,10 +78,17 @@ export function AppShell({
             {healthy ? "Relay healthy" : "Awaiting relay data"}
           </div>
           <div className="num mt-2 text-xl font-semibold text-primary">
-            {freshest === undefined ? "—" : freshest < 1000 ? "<1s" : `${Math.round(freshest / 1000)}s`}
+            {latency === null
+              ? "—"
+              : latency < 1
+                ? `${Math.round(latency * 1000)}ms`
+                : `${latency.toFixed(2)}s`}
           </div>
           <div className="text-[11px] text-muted-foreground">
-            since last account update{lastUpdate ? ` · ${relativeTime(lastUpdate)}` : ""}
+            avg copy latency, 30d
+            {stats?.avg_relay_latency_sample_size_30d
+              ? ` · ${stats.avg_relay_latency_sample_size_30d.toLocaleString()} copies`
+              : ""}
           </div>
         </div>
         <div className="absolute inset-x-3 bottom-3 flex items-center gap-3 rounded-lg border border-sidebar-border bg-surface-2 p-3">
