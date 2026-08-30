@@ -41,6 +41,7 @@ export function AppShell({
 }) {
   const [open, setOpen] = useState(false);
   const { user } = useSession();
+  const { data: accounts = [] } = useMyAccounts();
   const { data: stats } = usePlatformStats();
   const latency = stats?.avg_relay_latency_seconds_30d ?? null;
   const healthy = latency !== null;
