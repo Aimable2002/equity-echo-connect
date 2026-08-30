@@ -309,6 +309,8 @@ export const endpoints = {
     api
       .get(`/accounts/${accountId}/wallet/transactions`)
       .then((r) => unwrapList<Record<string, unknown>>(r, "transactions")),
+  walletTopup: (accountId: string, amount: number) =>
+    api.post<Record<string, unknown>>(`/accounts/${accountId}/wallet/topup`, { amount }),
   billing: (accountId: string) => api.get<Record<string, unknown>>(`/accounts/${accountId}/billing`),
   selectPackage: (accountId: string, packageCode: string) =>
     api.post(`/accounts/${accountId}/billing/select-package`, { package_code: packageCode }),
