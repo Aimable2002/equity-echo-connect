@@ -224,16 +224,29 @@ export function unwrapList<T>(res: unknown, ...keys: string[]): T[] {
   return [];
 }
 
+export type PlatformStats = {
+  masters_count: number;
+  live_accounts_count: number;
+  copied_today: number;
+  avg_relay_latency_seconds_30d: number | null;
+  avg_relay_latency_sample_size_30d: number | null;
+};
+
 export const endpoints = {
   /* ------------------------------------------------------------- public */
   challenges: () =>
     api
-      .get<ChallengeApiRow[] | { challenges: ChallengeApiRow[] }>("/challenges")
+      .get<ChallengeApiRow[] | { challenges: ChallengeApiRow[] }>("/challenges", {
+        anonymous: true,
+      })
       .then((r) => unwrapList<ChallengeApiRow>(r, "challenges")),
   mastersDirectory: () =>
     api
-      .get<DirectoryMaster[] | { masters: DirectoryMaster[] }>("/masters/directory")
+      .get<DirectoryMaster[] | { masters: DirectoryMaster[] }>("/masters/directory", {
+        anonymous: true,
+      })
       .then((r) => unwrapList<DirectoryMaster>(r, "masters")),
+  platformStats: () => api.get<PlatformStats>("/platform/stats", { anonymous: true }),
   currencies: () =>
     api
       .get<{ currencies: PaymentCurrency[] }>("/payments/currencies", { anonymous: true })
