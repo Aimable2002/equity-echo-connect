@@ -43,6 +43,7 @@ export const Route = createFileRoute("/")({
 function Landing() {
   const { data: masters = [] } = useMastersDirectory();
   const { data: packages = [] } = usePackages();
+  const { data: stats } = usePlatformStats();
 
   const accountIds = useMemo(() => masters.map((m) => m.account_id), [masters]);
   const statsMap = useMastersStats(accountIds);
